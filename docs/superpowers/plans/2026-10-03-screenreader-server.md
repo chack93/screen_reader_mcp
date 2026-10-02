@@ -6,7 +6,7 @@
 
 **Architecture:** Two layers. *Observation* resolves the target window's screen-absolute bounds, captures that region, and returns a PNG (for the vision model) and/or Apple Vision OCR text. *Action* maps model-chosen coordinates to screen space and synthesizes mouse/keyboard events. Pure logic (coordinate math, config, key parsing) is isolated into cgo-free packages that are unit-testable without a display; platform work (window, capture, OCR, input) is thin wrappers around `osascript`, `robotgo`, and `tmc/apple`.
 
-**Tech Stack:** Go 1.22+, `CGO_ENABLED=1`, Xcode Command Line Tools. Deps: `github.com/modelcontextprotocol/go-sdk` (Tier 1), `github.com/go-vgo/robotgo` (Cgo backend: mouse/keyboard/region-capture/clipboard), `github.com/tmc/apple` (Vision OCR), `golang.org/x/image` (downscale). Window enumeration/activation via `osascript` (AppleScript).
+**Tech Stack:** Go (module floor `go 1.26.0` — tmc/apple needs ≥1.25, x/image@latest needs 1.26; Go's toolchain auto-download covers older local installs), `CGO_ENABLED=1`, Xcode Command Line Tools. Deps: `github.com/modelcontextprotocol/go-sdk` (Tier 1), `github.com/go-vgo/robotgo` (Cgo backend: mouse/keyboard/region-capture/clipboard), `github.com/tmc/apple` (Vision OCR), `golang.org/x/image` (downscale). Window enumeration/activation via `osascript` (AppleScript).
 
 **Spec:** `docs/superpowers/specs/2026-10-03-screenreader-mcp-design.md`
 
@@ -203,8 +203,12 @@ Create `server/internal/geom/geom.go`:
 package geom
 
 // Rect is a screen-absolute rectangle: top-left (X,Y) and size (W,H).
+// JSON tags use lowercase so tool `rect` args match the on-disk config shape.
 type Rect struct {
-	X, Y, W, H int
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
 }
 
 // MapImageToScreen maps a point in image pixel space (top-left origin) to
@@ -1730,11 +1734,11 @@ func ocrFind(cfg *config.Config, text, match string) (bool, geom.Rect, string) {
 }
 
 func screenSize() (int, int) {
-	return robotgoGetScreenSize()
+	return robotgo.GetScreenSize()
 }
 ```
 
-> Add to imports: `"time"`, `"screenreader/internal/input"` (already), and a robotgo bridge. To avoid importing robotgo directly in tools, add to `capture` a `func ScreenSize() (int, int)` (Task 12 note) OR import `robotgo` here and define `func robotgoGetScreenSize() (int, int) { return robotgo.GetScreenSize() }`. Simplest: add `"github.com/go-vgo/robotgo"` to imports and the bridge func above.
+> This task adds two imports to the top of `tools.go`: `"time"` and `"github.com/go-vgo/robotgo"`.
 
 - [ ] **Step 2: Build**
 
