@@ -17,27 +17,36 @@ import (
 	"screenreader/internal/geom"
 	"screenreader/internal/input"
 	"screenreader/internal/ocr"
+	"screenreader/internal/perms"
 	"screenreader/internal/window"
 )
 
-// resolveRect picks the target region: explicit rect > app/title (override or cfg) > cfg pinned rect.
+// resolveRect picks the target region: explicit rect > per-call app/title > configured mode (rect/app).
 func resolveRect(cfg *config.Config, app, title string, rect *geom.Rect) (geom.Rect, error) {
 	if rect != nil {
 		return *rect, nil
 	}
-	appName := app
-	if appName == "" {
-		appName = cfg.App
+	// Per-call app or title → app target (app falls back to cfg.App).
+	if app != "" || title != "" {
+		a := app
+		if a == "" {
+			a = cfg.App
+		}
+		if a == "" {
+			return geom.Rect{}, fmt.Errorf("app/title override given but no app target configured (set_target app=...)")
+		}
+		t := title
+		if t == "" {
+			t = cfg.Title
+		}
+		return window.Resolve(a, t)
 	}
-	titleRe := title
-	if titleRe == "" {
-		titleRe = cfg.Title
-	}
-	if appName != "" {
-		return window.Resolve(appName, titleRe)
-	}
+	// No per-call app/title: honor the configured mode.
 	if cfg.Mode == "rect" && cfg.Rect.W > 0 && cfg.Rect.H > 0 {
 		return geom.Rect(cfg.Rect), nil
+	}
+	if cfg.App != "" {
+		return window.Resolve(cfg.App, cfg.Title)
 	}
 	return geom.Rect{}, fmt.Errorf("no target configured (set app or a pinned rect)")
 }
@@ -234,12 +243,18 @@ func RegisterInput(server *mcp.Server) {
 		DryRun bool       `json:"dry_run"`
 		Coords string     `json:"coords,omitempty" jsonschema:"screen|image"`
 		Rect   *geom.Rect `json:"rect,omitempty" jsonschema:"Region for image-relative coords"`
+		ImgW   int        `json:"img_w,omitempty" jsonschema:"Captured image width (from capture's image=WxH)"`
+		ImgH   int        `json:"img_h,omitempty" jsonschema:"Captured image height (from capture's image=WxH)"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "click", Description: "Click at screen-absolute (x,y)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a clickArgs) (*mcp.CallToolResult, any, error) {
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
-				x, y = geom.MapImageToScreen(a.X, a.Y, a.Rect.W, a.Rect.H, *a.Rect)
+				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
+			}
+			sw, sh := screenSize()
+			if e := boundsErr(x, y, sw, sh); e != nil {
+				return errResult(e), nil, nil
 			}
 			button := orDefault(a.Button, "left")
 			clicks := a.Clicks
@@ -258,12 +273,18 @@ func RegisterInput(server *mcp.Server) {
 		Y      int        `json:"y"`
 		Coords string     `json:"coords,omitempty" jsonschema:"screen|image"`
 		Rect   *geom.Rect `json:"rect,omitempty"`
+		ImgW   int        `json:"img_w,omitempty" jsonschema:"Captured image width (from capture's image=WxH)"`
+		ImgH   int        `json:"img_h,omitempty" jsonschema:"Captured image height (from capture's image=WxH)"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "move", Description: "Move the cursor to (x,y)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a xyArgs) (*mcp.CallToolResult, any, error) {
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
-				x, y = geom.MapImageToScreen(a.X, a.Y, a.Rect.W, a.Rect.H, *a.Rect)
+				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
+			}
+			sw, sh := screenSize()
+			if e := boundsErr(x, y, sw, sh); e != nil {
+				return errResult(e), nil, nil
 			}
 			input.Move(x, y)
 			input.Delay(delay())
@@ -271,15 +292,27 @@ func RegisterInput(server *mcp.Server) {
 		})
 
 	type scrollArgs struct {
-		DX int `json:"dx"`
-		DY int `json:"dy"`
-		X  int `json:"x,omitempty"`
-		Y  int `json:"y,omitempty"`
+		DX     int        `json:"dx"`
+		DY     int        `json:"dy"`
+		X      int        `json:"x,omitempty"`
+		Y      int        `json:"y,omitempty"`
+		Coords string     `json:"coords,omitempty" jsonschema:"screen|image"`
+		Rect   *geom.Rect `json:"rect,omitempty" jsonschema:"Region for image-relative coords"`
+		ImgW   int        `json:"img_w,omitempty" jsonschema:"Captured image width (from capture's image=WxH)"`
+		ImgH   int        `json:"img_h,omitempty" jsonschema:"Captured image height (from capture's image=WxH)"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "scroll", Description: "Scroll by (dx,dy) at (x,y) if given."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a scrollArgs) (*mcp.CallToolResult, any, error) {
-			if a.X != 0 || a.Y != 0 {
-				input.Move(a.X, a.Y)
+			x, y := a.X, a.Y
+			if a.Coords == "image" && a.Rect != nil {
+				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
+			}
+			if x != 0 || y != 0 {
+				sw, sh := screenSize()
+				if e := boundsErr(x, y, sw, sh); e != nil {
+					return errResult(e), nil, nil
+				}
+				input.Move(x, y)
 			}
 			input.Scroll(a.DX, a.DY)
 			input.Delay(delay())
@@ -287,17 +320,33 @@ func RegisterInput(server *mcp.Server) {
 		})
 
 	type dragArgs struct {
-		X1     int    `json:"x1"`
-		Y1     int    `json:"y1"`
-		X2     int    `json:"x2"`
-		Y2     int    `json:"y2"`
-		Button string `json:"button,omitempty"`
-		DryRun bool   `json:"dry_run"`
+		X1     int        `json:"x1"`
+		Y1     int        `json:"y1"`
+		X2     int        `json:"x2"`
+		Y2     int        `json:"y2"`
+		Button string     `json:"button,omitempty"`
+		DryRun bool       `json:"dry_run"`
+		Coords string     `json:"coords,omitempty" jsonschema:"screen|image"`
+		Rect   *geom.Rect `json:"rect,omitempty" jsonschema:"Region for image-relative coords"`
+		ImgW   int        `json:"img_w,omitempty" jsonschema:"Captured image width (from capture's image=WxH)"`
+		ImgH   int        `json:"img_h,omitempty" jsonschema:"Captured image height (from capture's image=WxH)"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "drag", Description: "Drag from (x1,y1) to (x2,y2)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a dragArgs) (*mcp.CallToolResult, any, error) {
+			x1, y1, x2, y2 := a.X1, a.Y1, a.X2, a.Y2
+			if a.Coords == "image" && a.Rect != nil {
+				x1, y1 = mapImageXY(a.X1, a.Y1, a.ImgW, a.ImgH, *a.Rect)
+				x2, y2 = mapImageXY(a.X2, a.Y2, a.ImgW, a.ImgH, *a.Rect)
+			}
+			sw, sh := screenSize()
+			if e := boundsErr(x1, y1, sw, sh); e != nil {
+				return errResult(e), nil, nil
+			}
+			if e := boundsErr(x2, y2, sw, sh); e != nil {
+				return errResult(e), nil, nil
+			}
 			button := orDefault(a.Button, "left")
-			r := input.Drag(a.X1, a.Y1, a.X2, a.Y2, button, a.DryRun)
+			r := input.Drag(x1, y1, x2, y2, button, a.DryRun)
 			input.Delay(delay())
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("drag to (%d,%d) executed=%v", r.X, r.Y, r.Executed)}}}, nil, nil
 		})
@@ -344,10 +393,12 @@ func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
 func RegisterTarget(server *mcp.Server) {
 	type setTargetArgs struct {
-		App   string     `json:"app,omitempty"`
-		Title string     `json:"title,omitempty"`
-		Rect  *geom.Rect `json:"rect,omitempty"`
-		Mode  string     `json:"mode,omitempty" jsonschema:"app|rect"`
+		App        string     `json:"app,omitempty"`
+		Title      string     `json:"title,omitempty"`
+		Rect       *geom.Rect `json:"rect,omitempty"`
+		Mode       string     `json:"mode,omitempty" jsonschema:"app|rect"`
+		ClearApp   bool       `json:"clear_app,omitempty" jsonschema:"Clear the stored app target"`
+		ClearTitle bool       `json:"clear_title,omitempty" jsonschema:"Clear the stored title filter"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "set_target", Description: "Set + persist the default target (app/title or pinned rect)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a setTargetArgs) (*mcp.CallToolResult, any, error) {
@@ -365,6 +416,12 @@ func RegisterTarget(server *mcp.Server) {
 				cfg.Mode = a.Mode
 			} else if a.Rect != nil {
 				cfg.Mode = "rect"
+			}
+			if a.ClearApp {
+				cfg.App = ""
+			}
+			if a.ClearTitle {
+				cfg.Title = ""
 			}
 			if err := config.Save(config.DefaultPath(), cfg); err != nil {
 				return errResult(err), nil, nil
@@ -424,10 +481,13 @@ func RegisterTarget(server *mcp.Server) {
 		})
 
 	type waitTextArgs struct {
-		Text       string `json:"text"`
-		TimeoutMs  int    `json:"timeout_ms"`
-		IntervalMs int    `json:"interval_ms,omitempty"`
-		Match      string `json:"match,omitempty" jsonschema:"exact|contains|regex"`
+		Text       string     `json:"text"`
+		TimeoutMs  int        `json:"timeout_ms"`
+		IntervalMs int        `json:"interval_ms,omitempty"`
+		Match      string     `json:"match,omitempty" jsonschema:"exact|contains|regex"`
+		App        string     `json:"app,omitempty"`
+		Title      string     `json:"title,omitempty"`
+		Rect       *geom.Rect `json:"rect,omitempty"`
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "wait_for_text", Description: "Poll OCR until the text appears or timeout."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a waitTextArgs) (*mcp.CallToolResult, any, error) {
@@ -440,11 +500,12 @@ func RegisterTarget(server *mcp.Server) {
 			if interval <= 0 {
 				interval = 500
 			}
-			deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+			start := time.Now()
+			deadline := start.Add(time.Duration(timeout) * time.Millisecond)
 			for {
-				if found, box, l := ocrFind(cfg, a.Text, a.Match); found {
+				if found, box, l := ocrFind(cfg, a.App, a.Title, a.Rect, a.Text, a.Match); found {
 					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
-						Text: fmt.Sprintf("found %q at %+v (line %q)", a.Text, box, l),
+						Text: fmt.Sprintf("found %q at %+v (line %q) after %dms", a.Text, box, l, time.Since(start).Milliseconds()),
 					}}}, nil, nil
 				}
 				if time.Now().After(deadline) {
@@ -461,6 +522,10 @@ func RegisterTarget(server *mcp.Server) {
 			var out string
 			out += fmt.Sprintf("screen: %dx%d\n", sx, sy)
 			out += fmt.Sprintf("config: mode=%s app=%q title=%q rect=%+v\n", cfg.Mode, cfg.App, cfg.Title, cfg.Rect)
+			out += "permissions:\n"
+			out += permLine("screen_recording", perms.ScreenRecording(), "System Settings → Privacy & Security → Screen Recording (restart the app after granting)")
+			out += permLine("accessibility", perms.Accessibility(), "System Settings → Privacy & Security → Accessibility")
+			out += permLine("automation", perms.Automation(), "System Settings → Privacy & Security → Automation → allow your terminal to control System Events")
 			if r, err := resolveRect(cfg, "", "", nil); err != nil {
 				out += "target: ERROR " + err.Error() + " (try list_windows / set_target)\n"
 			} else {
@@ -470,9 +535,18 @@ func RegisterTarget(server *mcp.Server) {
 		})
 }
 
-// ocrFind runs OCR on the current target and searches for text; returns found, box, line.
-func ocrFind(cfg *config.Config, text, match string) (bool, geom.Rect, string) {
-	r, err := resolveRect(cfg, "", "", nil)
+// permLine renders one permission status line for the doctor report.
+func permLine(name string, ok bool, hint string) string {
+	status := "ok"
+	if !ok {
+		status = "MISSING — grant: " + hint
+	}
+	return "  " + name + ": " + status + "\n"
+}
+
+// ocrFind runs OCR on the target and searches for text; returns found, box, line.
+func ocrFind(cfg *config.Config, app, title string, rect *geom.Rect, text, match string) (bool, geom.Rect, string) {
+	r, err := resolveRect(cfg, app, title, rect)
 	if err != nil {
 		return false, geom.Rect{}, ""
 	}
@@ -510,4 +584,27 @@ func ocrFind(cfg *config.Config, text, match string) (bool, geom.Rect, string) {
 
 func screenSize() (int, int) {
 	return robotgo.GetScreenSize()
+}
+
+// mapImageXY maps an image-space point to screen-absolute coords, using r as the
+// screen-absolute bounds and (imgW,imgH) as the captured image pixel size. If
+// imgW/imgH are <=0 it falls back to r's own size (1:1; non-Retina / no downscale).
+func mapImageXY(imgX, imgY, imgW, imgH int, r geom.Rect) (int, int) {
+	if imgW <= 0 {
+		imgW = r.W
+	}
+	if imgH <= 0 {
+		imgH = r.H
+	}
+	return geom.MapImageToScreen(imgX, imgY, imgW, imgH, r)
+}
+
+// boundsErr reports whether (x,y) is outside the main display. Safety net for
+// real-cursor actions. Multi-display setups may have valid coords outside the
+// main display; treat such rejections as "re-pin the rect or use screen coords".
+func boundsErr(x, y, sw, sh int) error {
+	if x < 0 || y < 0 || x >= sw || y >= sh {
+		return fmt.Errorf("coordinates (%d,%d) out of bounds (screen %dx%d)", x, y, sw, sh)
+	}
+	return nil
 }

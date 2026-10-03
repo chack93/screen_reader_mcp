@@ -55,7 +55,7 @@ Pick one (or mix — per-call args always override config):
 }
 ```
 
-2. **Call the `set_target` tool** — sets and persists the default target (app/title, or a pinned rect with `mode: "rect"`).
+2. **Call the `set_target` tool** — sets and persists the default target (app/title, or a pinned rect with `mode: "rect"`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
 3. Use `list_windows` to discover the exact app name / title regex / bounds to pin.
 
 ## opencode config
@@ -83,27 +83,27 @@ opencode spawns the binary and talks to it over stdio.
 | `capture` | Capture the target window (or region) as a PNG image, with region bounds and image size. | `app`, `title`, `rect`, `max_width` |
 | `ocr` | OCR the target window (or region) with Apple Vision; returns text and screen-absolute boxes. | `app`, `title`, `rect`, `languages`, `level`, `include_boxes` |
 | `click_text` | OCR-locate text in the target and click its center (screen-absolute). | `text`, `match`, `occurrence`, `dry_run` |
-| `click` | Click at screen-absolute (x,y). | `x`, `y`, `button`, `clicks`, `dry_run`, `coords`, `rect` |
-| `move` | Move the cursor to (x,y). | `x`, `y`, `coords`, `rect` |
-| `scroll` | Scroll by (dx,dy) at (x,y) if given. | `dx`, `dy`, `x`, `y` |
-| `drag` | Drag from (x1,y1) to (x2,y2). | `x1`, `y1`, `x2`, `y2`, `button`, `dry_run` |
+| `click` | Click at screen-absolute (x,y). | `x`, `y`, `button`, `clicks`, `dry_run`, `coords`, `rect`, `img_w`, `img_h` |
+| `move` | Move the cursor to (x,y). | `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
+| `scroll` | Scroll by (dx,dy) at (x,y) if given. | `dx`, `dy`, `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
+| `drag` | Drag from (x1,y1) to (x2,y2). | `x1`, `y1`, `x2`, `y2`, `button`, `dry_run`, `coords`, `rect`, `img_w`, `img_h` |
 | `type` | Type text via keystrokes. | `text` |
 | `paste` | Paste text (clipboard + Cmd+V); reliable for long text/commands. | `text` |
 | `key` | Press a key/shortcut combo, e.g. `"cmd+v"`, `"return"`. | `combo` |
 | `wait` | Sleep for ms milliseconds. | `ms` |
-| `set_target` | Set + persist the default target (app/title or pinned rect). | `app`, `title`, `rect`, `mode` |
+| `set_target` | Set + persist the default target (app/title or pinned rect). | `app`, `title`, `rect`, `mode`, `clear_app`, `clear_title` |
 | `focus_window` | Activate the target app and raise its window; return bounds. | `app`, `title` |
 | `window_info` | Report the resolved target (app, title, mode, bounds). | — |
 | `list_windows` | List visible windows (app, title, bounds) to choose a target. | — |
-| `wait_for_text` | Poll OCR until the text appears or timeout. | `text`, `timeout_ms`, `interval_ms`, `match` |
+| `wait_for_text` | Poll OCR until the text appears or timeout. | `text`, `timeout_ms`, `interval_ms`, `match`, `app`, `title`, `rect` |
 | `doctor` | Self-check: target resolution and screen size. | — |
 
 ## Coordinate model
 
 - **Screen-absolute by default**: top-left origin, Y down. All input coordinates (click, move, drag) and OCR boxes are in these coordinates.
-- `capture` returns `bounds={x,y,w,h}` (screen region) **and** `image=WxH` (pixel size, may be downscaled or Retina-doubled). Map image→screen proportionally: `screen = bounds.x + imgX * (bounds.w / imgW)`.
+- `capture` returns `bounds={x,y,w,h}` (screen region) **and** `image=WxH` (pixel size, may be downscaled or Retina-doubled). Map image→screen proportionally: `screenX = bounds.x + (px / img_w) * bounds.w` (same for Y).
 - `ocr` boxes are **screen-absolute** — usable directly with `click`/`drag` (with `include_boxes` to print them).
-- Optional escape hatch: `coords: "image"` + `rect` on `click`/`move` maps a point in captured-image space to screen space.
+- Optional escape hatch: `coords: "image"` + `rect` on `click`/`move`/`drag`/`scroll` maps a point in captured-image space to screen space using the same proportional formula; pass `img_w`/`img_h` from `capture`'s `image=WxH` for correct Retina/downscale mapping (fall back to 1:1 when omitted). Coordinates are validated against the main display bounds and rejected if out of range.
 
 ## Safety
 

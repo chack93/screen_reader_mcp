@@ -31,16 +31,19 @@ func runAppleScript(script string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// windowsOfApp returns "title<tab>x<tab>y<tab>w<tab>h" lines for the app's windows.
+// windowsOfApp returns "index<tab>title<tab>x<tab>y<tab>w<tab>h" lines for the
+// app's windows; index is the 1-based position in the app's window list.
 func windowsOfApp(app string) (string, error) {
 	script := fmt.Sprintf(`
 tell application "System Events"
   set proc to first process whose name is "%s"
   set lines to {}
+  set idx to 0
   repeat with w in (every window of proc)
+    set idx to idx + 1
     set p to position of w
     set s to size of w
-    set end of lines to ((title of w) & tab & (item 1 of p) & tab & (item 2 of p) & tab & (item 1 of s) & tab & (item 2 of s))
+    set end of lines to (idx & tab & (title of w) & tab & (item 1 of p) & tab & (item 2 of p) & tab & (item 1 of s) & tab & (item 2 of s))
   end repeat
   set AppleScript's text item delimiters to linefeed
   return lines as text
@@ -63,19 +66,44 @@ func Resolve(app, title string) (geom.Rect, error) {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) < 5 {
+		if len(f) < 6 {
 			continue
 		}
-		if title != "" && !re.MatchString(f[0]) {
+		if title != "" && !re.MatchString(f[1]) {
 			continue
 		}
-		x, _ := strconv.Atoi(f[1])
-		y, _ := strconv.Atoi(f[2])
-		w, _ := strconv.Atoi(f[3])
-		h, _ := strconv.Atoi(f[4])
+		x, _ := strconv.Atoi(f[2])
+		y, _ := strconv.Atoi(f[3])
+		w, _ := strconv.Atoi(f[4])
+		h, _ := strconv.Atoi(f[5])
 		return geom.Rect{X: x, Y: y, W: w, H: h}, nil
 	}
 	return geom.Rect{}, fmt.Errorf("no window for app %q (title %q)", app, title)
+}
+
+// resolveIndex returns the 1-based index (in the app's window list) of the window
+// whose title matches title (regex; empty = first window).
+func resolveIndex(app, title string) (int, error) {
+	raw, err := windowsOfApp(app)
+	if err != nil {
+		return 0, err
+	}
+	re := regexp.MustCompile(title)
+	for i, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) < 6 {
+			continue
+		}
+		if title != "" && !re.MatchString(f[1]) {
+			continue
+		}
+		return i + 1, nil
+	}
+	return 0, fmt.Errorf("no window for app %q (title %q)", app, title)
 }
 
 // List returns visible windows across all apps.
@@ -124,6 +152,11 @@ end tell
 func Focus(app, title string) (geom.Rect, error) {
 	if _, err := runAppleScript(fmt.Sprintf(`tell application "%s" to activate`, app)); err != nil {
 		return geom.Rect{}, err
+	}
+	if idx, err := resolveIndex(app, title); err == nil && idx > 1 {
+		runAppleScript(fmt.Sprintf(
+			`tell application "System Events" to set index of window %d of (first process whose name is "%s") to 1`,
+			idx, app))
 	}
 	return Resolve(app, title)
 }
