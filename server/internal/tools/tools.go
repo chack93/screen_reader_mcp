@@ -220,3 +220,122 @@ func orDefault(s, d string) string {
 }
 func regexpCompile(s string) (*regexp.Regexp, error) { return regexp.Compile(s) }
 func inputClick(x, y int, dryRun bool)               { input.Click(x, y, "left", 1, dryRun) }
+
+func RegisterInput(server *mcp.Server) {
+	delay := func() int { return loadCfg().Input.DelayMs }
+
+	type clickArgs struct {
+		X      int        `json:"x"`
+		Y      int        `json:"y"`
+		Button string     `json:"button,omitempty" jsonschema:"left|right|middle"`
+		Clicks int        `json:"clicks,omitempty" jsonschema:"1 or 2"`
+		DryRun bool       `json:"dry_run"`
+		Coords string     `json:"coords,omitempty" jsonschema:"screen|image"`
+		Rect   *geom.Rect `json:"rect,omitempty" jsonschema:"Region for image-relative coords"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "click", Description: "Click at screen-absolute (x,y)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a clickArgs) (*mcp.CallToolResult, any, error) {
+			x, y := a.X, a.Y
+			if a.Coords == "image" && a.Rect != nil {
+				x, y = geom.MapImageToScreen(a.X, a.Y, a.Rect.W, a.Rect.H, *a.Rect)
+			}
+			button := orDefault(a.Button, "left")
+			clicks := a.Clicks
+			if clicks < 1 {
+				clicks = 1
+			}
+			r := input.Click(x, y, button, clicks, a.DryRun)
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("click %s @(%d,%d) executed=%v", button, x, y, r.Executed),
+			}}}, nil, nil
+		})
+
+	type xyArgs struct {
+		X      int        `json:"x"`
+		Y      int        `json:"y"`
+		Coords string     `json:"coords,omitempty" jsonschema:"screen|image"`
+		Rect   *geom.Rect `json:"rect,omitempty"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "move", Description: "Move the cursor to (x,y)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a xyArgs) (*mcp.CallToolResult, any, error) {
+			x, y := a.X, a.Y
+			if a.Coords == "image" && a.Rect != nil {
+				x, y = geom.MapImageToScreen(a.X, a.Y, a.Rect.W, a.Rect.H, *a.Rect)
+			}
+			input.Move(x, y)
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("moved to (%d,%d)", x, y)}}}, nil, nil
+		})
+
+	type scrollArgs struct {
+		DX int `json:"dx"`
+		DY int `json:"dy"`
+		X  int `json:"x,omitempty"`
+		Y  int `json:"y,omitempty"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "scroll", Description: "Scroll by (dx,dy) at (x,y) if given."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a scrollArgs) (*mcp.CallToolResult, any, error) {
+			if a.X != 0 || a.Y != 0 {
+				input.Move(a.X, a.Y)
+			}
+			input.Scroll(a.DX, a.DY)
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("scrolled %d,%d", a.DX, a.DY)}}}, nil, nil
+		})
+
+	type dragArgs struct {
+		X1     int    `json:"x1"`
+		Y1     int    `json:"y1"`
+		X2     int    `json:"x2"`
+		Y2     int    `json:"y2"`
+		Button string `json:"button,omitempty"`
+		DryRun bool   `json:"dry_run"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "drag", Description: "Drag from (x1,y1) to (x2,y2)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a dragArgs) (*mcp.CallToolResult, any, error) {
+			button := orDefault(a.Button, "left")
+			r := input.Drag(a.X1, a.Y1, a.X2, a.Y2, button, a.DryRun)
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("drag to (%d,%d) executed=%v", r.X, r.Y, r.Executed)}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "type", Description: "Type text via keystrokes."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+			Text string `json:"text"`
+		}) (*mcp.CallToolResult, any, error) {
+			input.Type(a.Text)
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "typed " + itoa(len(a.Text)) + " chars"}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "paste", Description: "Paste text (clipboard + Cmd+V); reliable for long text/commands."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+			Text string `json:"text"`
+		}) (*mcp.CallToolResult, any, error) {
+			input.Paste(a.Text)
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pasted"}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "key", Description: "Press a key/shortcut combo, e.g. \"cmd+v\", \"return\"."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+			Combo string `json:"combo"`
+		}) (*mcp.CallToolResult, any, error) {
+			if err := input.Key(a.Combo); err != nil {
+				return errResult(err), nil, nil
+			}
+			input.Delay(delay())
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pressed " + a.Combo}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "wait", Description: "Sleep for ms milliseconds."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+			Ms int `json:"ms"`
+		}) (*mcp.CallToolResult, any, error) {
+			input.Delay(a.Ms)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "waited " + itoa(a.Ms) + "ms"}}}, nil, nil
+		})
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
