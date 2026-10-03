@@ -31,6 +31,33 @@ func runAppleScript(script string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// appleQuote escapes a value for embedding in an AppleScript double-quoted string
+// (AppleScript escapes an embedded double quote by doubling it).
+func appleQuote(s string) string {
+	return strings.ReplaceAll(s, `"`, `""`)
+}
+
+// splitWindowLine parses "<first>\t<title...>\t<x>\t<y>\t<w>\t<h>". The title may
+// itself contain tabs; it is everything between the first field and the final four
+// geometry fields, rejoined. ok is false if there are <6 fields or any geometry
+// field is non-numeric.
+func splitWindowLine(line string) (first, title string, x, y, w, h int, ok bool) {
+	f := strings.Split(line, "\t")
+	if len(f) < 6 {
+		return "", "", 0, 0, 0, 0, false
+	}
+	geo := f[len(f)-4:]
+	var e1, e2, e3, e4 error
+	x, e1 = strconv.Atoi(geo[0])
+	y, e2 = strconv.Atoi(geo[1])
+	w, e3 = strconv.Atoi(geo[2])
+	h, e4 = strconv.Atoi(geo[3])
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
+		return "", "", 0, 0, 0, 0, false
+	}
+	return f[0], strings.Join(f[1:len(f)-4], "\t"), x, y, w, h, true
+}
+
 // windowsOfApp returns "index<tab>title<tab>x<tab>y<tab>w<tab>h" lines for the
 // app's windows; index is the 1-based position in the app's window list.
 func windowsOfApp(app string) (string, error) {
@@ -47,7 +74,7 @@ tell application "System Events"
   end repeat
   set AppleScript's text item delimiters to linefeed
   return lines as text
-end tell`, app)
+end tell`, appleQuote(app))
 	return runAppleScript(script)
 }
 
@@ -58,24 +85,23 @@ func Resolve(app, title string) (geom.Rect, error) {
 	if err != nil {
 		return geom.Rect{}, fmt.Errorf("resolve %q: %w", app, err)
 	}
+	re, err := regexp.Compile(title)
+	if err != nil {
+		return geom.Rect{}, fmt.Errorf("invalid title regex %q: %w", title, err)
+	}
 	lines := strings.Split(raw, "\n")
-	re := regexp.MustCompile(title)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		f := strings.Split(line, "\t")
-		if len(f) < 6 {
+		_, winTitle, x, y, w, h, okk := splitWindowLine(line)
+		if !okk {
 			continue
 		}
-		if title != "" && !re.MatchString(f[1]) {
+		if title != "" && !re.MatchString(winTitle) {
 			continue
 		}
-		x, _ := strconv.Atoi(f[2])
-		y, _ := strconv.Atoi(f[3])
-		w, _ := strconv.Atoi(f[4])
-		h, _ := strconv.Atoi(f[5])
 		return geom.Rect{X: x, Y: y, W: w, H: h}, nil
 	}
 	return geom.Rect{}, fmt.Errorf("no window for app %q (title %q)", app, title)
@@ -88,17 +114,20 @@ func resolveIndex(app, title string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	re := regexp.MustCompile(title)
+	re, err := regexp.Compile(title)
+	if err != nil {
+		return 0, fmt.Errorf("invalid title regex %q: %w", title, err)
+	}
 	for i, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		f := strings.Split(line, "\t")
-		if len(f) < 6 {
+		_, winTitle, _, _, _, _, okk := splitWindowLine(line)
+		if !okk {
 			continue
 		}
-		if title != "" && !re.MatchString(f[1]) {
+		if title != "" && !re.MatchString(winTitle) {
 			continue
 		}
 		return i + 1, nil
@@ -135,28 +164,24 @@ end tell
 		if line == "" {
 			continue
 		}
-		f := strings.Split(line, "\t")
-		if len(f) < 6 {
+		appName, winTitle, x, y, w, h, okk := splitWindowLine(line)
+		if !okk {
 			continue
 		}
-		x, _ := strconv.Atoi(f[2])
-		y, _ := strconv.Atoi(f[3])
-		w, _ := strconv.Atoi(f[4])
-		h, _ := strconv.Atoi(f[5])
-		wins = append(wins, Win{App: f[0], Title: f[1], Rect: geom.Rect{X: x, Y: y, W: w, H: h}})
+		wins = append(wins, Win{App: appName, Title: winTitle, Rect: geom.Rect{X: x, Y: y, W: w, H: h}})
 	}
 	return wins, nil
 }
 
 // Focus activates the app and raises the matching window; returns its rect.
 func Focus(app, title string) (geom.Rect, error) {
-	if _, err := runAppleScript(fmt.Sprintf(`tell application "%s" to activate`, app)); err != nil {
+	if _, err := runAppleScript(fmt.Sprintf(`tell application "%s" to activate`, appleQuote(app))); err != nil {
 		return geom.Rect{}, err
 	}
 	if idx, err := resolveIndex(app, title); err == nil && idx > 1 {
 		runAppleScript(fmt.Sprintf(
 			`tell application "System Events" to set index of window %d of (first process whose name is "%s") to 1`,
-			idx, app))
+			idx, appleQuote(app)))
 	}
 	return Resolve(app, title)
 }
