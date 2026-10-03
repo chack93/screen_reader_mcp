@@ -715,6 +715,7 @@ tell application "System Events"
   end repeat
   set AppleScript's text item delimiters to linefeed
   return lines as text
+end tell
 `
 	raw, err := runAppleScript(script)
 	if err != nil {
