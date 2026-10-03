@@ -7,7 +7,9 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/go-vgo/robotgo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"screenreader/internal/capture"
@@ -339,3 +341,173 @@ func RegisterInput(server *mcp.Server) {
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+func RegisterTarget(server *mcp.Server) {
+	type setTargetArgs struct {
+		App   string     `json:"app,omitempty"`
+		Title string     `json:"title,omitempty"`
+		Rect  *geom.Rect `json:"rect,omitempty"`
+		Mode  string     `json:"mode,omitempty" jsonschema:"app|rect"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "set_target", Description: "Set + persist the default target (app/title or pinned rect)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a setTargetArgs) (*mcp.CallToolResult, any, error) {
+			cfg := loadCfg()
+			if a.App != "" {
+				cfg.App = a.App
+			}
+			if a.Title != "" {
+				cfg.Title = a.Title
+			}
+			if a.Rect != nil {
+				cfg.Rect = config.Rect{X: a.Rect.X, Y: a.Rect.Y, W: a.Rect.W, H: a.Rect.H}
+			}
+			if a.Mode != "" {
+				cfg.Mode = a.Mode
+			} else if a.Rect != nil {
+				cfg.Mode = "rect"
+			}
+			if err := config.Save(config.DefaultPath(), cfg); err != nil {
+				return errResult(err), nil, nil
+			}
+			r, err := resolveRect(cfg, "", "", nil)
+			msg := fmt.Sprintf("target saved (mode=%s app=%q title=%q rect=%+v)", cfg.Mode, cfg.App, cfg.Title, cfg.Rect)
+			if err == nil {
+				msg += fmt.Sprintf(" resolved=%+v", r)
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "focus_window", Description: "Activate the target app and raise its window; return bounds."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+			App   string `json:"app,omitempty"`
+			Title string `json:"title,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			cfg := loadCfg()
+			app := orDefault(a.App, cfg.App)
+			title := orDefault(a.Title, cfg.Title)
+			if app == "" {
+				return errResult(fmt.Errorf("no app target configured")), nil, nil
+			}
+			r, err := window.Focus(app, title)
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("focused %s %+v", app, r)}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "window_info", Description: "Report the resolved target (app, title, mode, bounds)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
+			cfg := loadCfg()
+			r, err := resolveRect(cfg, "", "", nil)
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("mode=%s app=%q title=%q bounds=%+v", cfg.Mode, cfg.App, cfg.Title, r),
+			}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "list_windows", Description: "List visible windows (app, title, bounds) to choose a target."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
+			wins, err := window.List()
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			var out string
+			for _, w := range wins {
+				out += fmt.Sprintf("%s | %s | %+v\n", w.App, w.Title, w.Rect)
+			}
+			if out == "" {
+				out = "(no visible windows)"
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+		})
+
+	type waitTextArgs struct {
+		Text       string `json:"text"`
+		TimeoutMs  int    `json:"timeout_ms"`
+		IntervalMs int    `json:"interval_ms,omitempty"`
+		Match      string `json:"match,omitempty" jsonschema:"exact|contains|regex"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "wait_for_text", Description: "Poll OCR until the text appears or timeout."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a waitTextArgs) (*mcp.CallToolResult, any, error) {
+			cfg := loadCfg()
+			timeout := a.TimeoutMs
+			if timeout <= 0 {
+				timeout = 10000
+			}
+			interval := a.IntervalMs
+			if interval <= 0 {
+				interval = 500
+			}
+			deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+			for {
+				if found, box, l := ocrFind(cfg, a.Text, a.Match); found {
+					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf("found %q at %+v (line %q)", a.Text, box, l),
+					}}}, nil, nil
+				}
+				if time.Now().After(deadline) {
+					return errResult(fmt.Errorf("timed out after %dms waiting for %q", timeout, a.Text)), nil, nil
+				}
+				input.Delay(interval)
+			}
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "doctor", Description: "Self-check: target resolution and screen size."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
+			cfg := loadCfg()
+			sx, sy := screenSize()
+			var out string
+			out += fmt.Sprintf("screen: %dx%d\n", sx, sy)
+			out += fmt.Sprintf("config: mode=%s app=%q title=%q rect=%+v\n", cfg.Mode, cfg.App, cfg.Title, cfg.Rect)
+			if r, err := resolveRect(cfg, "", "", nil); err != nil {
+				out += "target: ERROR " + err.Error() + " (try list_windows / set_target)\n"
+			} else {
+				out += fmt.Sprintf("target: ok %+v\n", r)
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+		})
+}
+
+// ocrFind runs OCR on the current target and searches for text; returns found, box, line.
+func ocrFind(cfg *config.Config, text, match string) (bool, geom.Rect, string) {
+	r, err := resolveRect(cfg, "", "", nil)
+	if err != nil {
+		return false, geom.Rect{}, ""
+	}
+	res, err := capture.CaptureRegion(r, 0)
+	if err != nil {
+		return false, geom.Rect{}, ""
+	}
+	p, err := tempPNG(res.PNG)
+	if err != nil {
+		return false, geom.Rect{}, ""
+	}
+	defer os.Remove(p)
+	lines, err := ocr.OCR(p, cfg.OCR.Languages, cfg.OCR.Level, res.ImgW, res.ImgH, r)
+	if err != nil {
+		return false, geom.Rect{}, ""
+	}
+	for _, l := range lines {
+		ok := false
+		switch match {
+		case "exact":
+			ok = l.Text == text
+		case "regex":
+			if re, e := regexpCompile(text); e == nil {
+				ok = re.MatchString(l.Text)
+			}
+		default:
+			ok = containsFold(l.Text, text)
+		}
+		if ok {
+			return true, l.Box, l.Text
+		}
+	}
+	return false, geom.Rect{}, ""
+}
+
+func screenSize() (int, int) {
+	return robotgo.GetScreenSize()
+}
