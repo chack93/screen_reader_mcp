@@ -28,14 +28,14 @@ type InputCfg struct {
 }
 
 type Config struct {
-	Version int         `json:"version"`
-	App     string      `json:"app"`
-	Title   string      `json:"title"`
-	Mode    string      `json:"mode"` // "app" | "rect"
-	Rect    Rect        `json:"rect"`
-	OCR     OCRCfg      `json:"ocr"`
-	Capture CaptureCfg  `json:"capture"`
-	Input   InputCfg    `json:"input"`
+	Version int        `json:"version"`
+	App     string     `json:"app"`
+	Title   string     `json:"title"`
+	Mode    string     `json:"mode"` // "app" | "rect"
+	Rect    Rect       `json:"rect"`
+	OCR     OCRCfg     `json:"ocr"`
+	Capture CaptureCfg `json:"capture"`
+	Input   InputCfg   `json:"input"`
 }
 
 // DefaultPath returns $HOME/.config/screenreader/config.json.
