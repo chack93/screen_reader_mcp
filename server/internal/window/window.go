@@ -64,16 +64,18 @@ func windowsOfApp(app string) (string, error) {
 	script := fmt.Sprintf(`
 tell application "System Events"
   set proc to first process whose name is "%s"
-  set lines to {}
+  -- NOTE: local must not be named "lines" — AppleScript now treats "lines" as a
+  -- built-in text property, and "set end of lines to X" fails with -10006.
+  set out to {}
   set idx to 0
   repeat with w in (every window of proc)
     set idx to idx + 1
     set p to position of w
     set s to size of w
-    set end of lines to (idx & tab & (title of w) & tab & (item 1 of p) & tab & (item 2 of p) & tab & (item 1 of s) & tab & (item 2 of s))
+    set end of out to (idx & tab & (title of w) & tab & (item 1 of p) & tab & (item 2 of p) & tab & (item 1 of s) & tab & (item 2 of s))
   end repeat
   set AppleScript's text item delimiters to linefeed
-  return lines as text
+  return out as text
 end tell`, appleQuote(app))
 	return runAppleScript(script)
 }
@@ -139,19 +141,21 @@ func resolveIndex(app, title string) (int, error) {
 func List() ([]Win, error) {
 	script := `
 tell application "System Events"
-  set lines to {}
+  -- NOTE: local must not be named "lines" — AppleScript now treats "lines" as a
+  -- built-in text property, and "set end of lines to X" fails with -10006.
+  set out to {}
   repeat with p in (every process whose visible is true)
     try
       repeat with w in (every window of p)
         set pn to name of p
         set pos to position of w
         set sz to size of w
-        set end of lines to (pn & tab & (title of w) & tab & (item 1 of pos) & tab & (item 2 of pos) & tab & (item 1 of sz) & tab & (item 2 of sz))
+        set end of out to (pn & tab & (title of w) & tab & (item 1 of pos) & tab & (item 2 of pos) & tab & (item 1 of sz) & tab & (item 2 of sz))
       end repeat
     end try
   end repeat
   set AppleScript's text item delimiters to linefeed
-  return lines as text
+  return out as text
 end tell
 `
 	raw, err := runAppleScript(script)
