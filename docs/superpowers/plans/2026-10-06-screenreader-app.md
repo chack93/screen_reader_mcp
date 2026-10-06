@@ -1173,8 +1173,9 @@ final class RectMathTests: XCTestCase {
         XCTAssertEqual(RectMath.normalize(a, b).y, 50)
         XCTAssertEqual(RectMath.normalize(a, b).w, 100)
         XCTAssertEqual(RectMath.normalize(a, b).h, 100)
-        // reversed drag → same rect
-        XCTAssertEqual(RectMath.normalize(b, a), RectMath.normalize(a, b))
+        // reversed drag → same rect (T8 finding: tuples can't be XCTAssertEqual'd — not
+        // Equatable-conforming; bare == is the compiler special case)
+        XCTAssert(RectMath.normalize(b, a) == RectMath.normalize(a, b))
         // zero-size drag collapses
         XCTAssertEqual(RectMath.normalize(a, a).w, 0)
     }
@@ -1334,21 +1335,32 @@ Create `app/Sources/ScreenReaderKit/Snippet.swift`:
 import Foundation
 
 public enum Snippet {
+    private struct Server: Encodable {
+        let type: String
+        let url: String
+        let oauth: Bool
+        let headers: [String: String]?
+    }
+    private struct Entry: Encodable {
+        struct MCP: Encodable { let servers: [String: Server] }
+        let mcp: MCP
+    }
+
     /// The opencode.json server entry (a fragment to merge under mcp.servers)
     /// for this loopback endpoint.
     public static func opencodeEntry(addr: String, token: String) -> String {
-        var server: [String: Any] = [
-            "type": "remote",
-            "url": "http://\(addr)/mcp",
-            "oauth": false,
-        ]
-        if !token.isEmpty {
-            server["headers"] = ["Authorization": "Bearer \(token)"]
-        }
-        let obj: [String: Any] = ["mcp": ["servers": ["screenreader": server]]]
-        guard let data = try? JSONSerialization.data(
-            withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
-            let s = String(data: data, encoding: .utf8) else { return "{}" }
+        let entry = Entry(mcp: .init(servers: ["screenreader": .init(
+            type: "remote",
+            url: "http://\(addr)/mcp",
+            oauth: false,
+            headers: token.isEmpty ? nil : ["Authorization": "Bearer \(token)"],
+        )]))
+        let enc = JSONEncoder()
+        // T9 finding: JSONSerialization escapes "/" (http:\/\/…), failing the
+        // unescaped-URL assertion; JSONEncoder .withoutEscapingSlashes keeps it readable.
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? enc.encode(entry),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
         return s
     }
 }
@@ -1448,7 +1460,10 @@ final class BackoffCaptureTests: XCTestCase {
                                    isPlanar: false, colorSpaceName: .deviceRGB,
                                    bytesPerRow: 0, bitsPerPixel: 0)!
         for y in 0..<4 { for x in 0..<4 {
-            rep.setColor(NSColor(white: gray, alpha: 1), atX: x, y: y)
+            // T10 host finding: NSColor(white:) (Generic Gray) silently writes BLACK
+            // via setColor here (colorspace "Unrecognized colorspace number -1");
+            // deviceRGB is reliable.
+            rep.setColor(NSColor(deviceRed: gray, green: gray, blue: gray, alpha: 1), atX: x, y: y)
         } }
         return rep.representation(using: .png, properties: [:])!
     }
@@ -1459,12 +1474,14 @@ final class BackoffCaptureTests: XCTestCase {
     }
 
     func testIsAllBlackMixed() {
+        let black = NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 1)
+        let white = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1) // see T10 host finding above
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4,
                                    bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false,
                                    isPlanar: false, colorSpaceName: .deviceRGB,
                                    bytesPerRow: 0, bitsPerPixel: 0)!
-        for y in 0..<4 { for x in 0..<4 { rep.setColor(.black, atX: x, y: y) } }
-        rep.setColor(.white, atX: 2, y: 2)
+        for y in 0..<4 { for x in 0..<4 { rep.setColor(black, atX: x, y: y) } }
+        rep.setColor(white, atX: 2, y: 2)
         XCTAssertFalse(CaptureCheck.isAllBlack(rep.representation(using: .png, properties: [:])!))
     }
 
