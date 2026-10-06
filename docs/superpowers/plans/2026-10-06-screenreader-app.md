@@ -943,7 +943,8 @@ final class ConfigStoreTests: XCTestCase {
     }
 
     func testLoad_missingReturnsEmpty() throws {
-        XCTAssertEqual(try ConfigStore.load(path: "/nonexistent/xyz.json"), [:])
+        // (T7 finding: XCTAssertEqual can't compile for [String: Any] — not Equatable; isEmpty asserts the same intent)
+        XCTAssertTrue(try ConfigStore.load(path: "/nonexistent/xyz.json").isEmpty)
     }
 
     func testLoad_unparseableThrows() throws {
