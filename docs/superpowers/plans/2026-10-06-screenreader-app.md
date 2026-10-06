@@ -1671,8 +1671,25 @@ private final class StubURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        Self.requests.append(request)
-        let (status, headers, body) = Self.handler!(request)
+        var req = request
+        if req.httpBody == nil, let stream = req.httpBodyStream {
+            // T12 finding: URLSession may move the body into a stream before
+            // URLProtocol sees it, so reconstruct httpBody from httpBodyStream.
+            stream.open()
+            var data = Data()
+            let bufferSize = 4096
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+            while stream.hasBytesAvailable {
+                let read = stream.read(buffer, maxLength: bufferSize)
+                if read <= 0 { break }
+                data.append(buffer, count: read)
+            }
+            buffer.deallocate()
+            stream.close()
+            req.httpBody = data
+        }
+        Self.requests.append(req)
+        let (status, headers, body) = Self.handler!(req)
         var h = headers
         if h["Content-Type"] == nil { h["Content-Type"] = "application/json" }
         let resp = HTTPURLResponse(url: request.url!, statusCode: status,
@@ -1696,7 +1713,7 @@ final class MCPClientTests: XCTestCase {
 
     func testInitializeThenCallToolText() async throws {
         StubURLProtocol.handler = { req in
-            let body = req.httpBody.map { String(data: $0, encoding: .utf8) } ?? ""
+            let body = req.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? "" // T12: map yields String??
             if body.contains("\"initialize\"") {
                 return (200, ["mcp-session-id": "S1"],
                         Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"screenreader","version":"0.1.0"}}}"#.utf8))
@@ -1724,7 +1741,7 @@ final class MCPClientTests: XCTestCase {
 
     func testSSEResponseIsParsed() async throws {
         StubURLProtocol.handler = { req in
-            let body = req.httpBody.map { String(data: $0, encoding: .utf8) } ?? ""
+            let body = req.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? "" // T12: map yields String??
             if body.contains("\"initialize\"") {
                 return (200, ["mcp-session-id": "S1"],
                         Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"screenreader","version":"0.1.0"}}}"#.utf8))
@@ -1830,10 +1847,14 @@ public final class MCPClient: @unchecked Sendable {
     }
 
     @discardableResult
-    private func send(method: String, id: Int? = nil, params: [String: Any]) async throws -> [String: Any] {
+    private func send(id: Int? = nil, method: String, params: [String: Any]) async throws -> [String: Any] {
         var body: [String: Any] = ["jsonrpc": "2.0", "method": method, "params": params]
         if let id { body["id"] = id }
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+        // T12 findings: declaration reordered (call sites pass id: first — Swift arg
+        // order); withoutEscapingSlashes (default emits tools\/call, breaking the
+        // stub's unescaped method-string match; wire semantics identical).
+        guard let data = try? JSONSerialization.data(withJSONObject: body,
+                                                      options: [.withoutEscapingSlashes]) else {
             throw MCPClientError.transport("encode failed")
         }
         var req = URLRequest(url: baseURL.appendingPathComponent("mcp"))
