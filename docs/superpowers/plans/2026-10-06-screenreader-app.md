@@ -1954,6 +1954,13 @@ final class ServerProcess {
     private var healthTimer: Timer?
     private let q = DispatchQueue(label: "screenreader.server")
 
+    /// T13 fix: child pid for the SIGTERM handler. Written on q in spawn()/killChild().
+    /// SIGTERM (killall / force-quit) never runs applicationWillTerminate, so the
+    /// handler kills the child directly. The Go server does not trap SIGTERM.
+    private static let childPid = UnsafeAtomic<Int32>(0)
+
+    init() { signal(SIGTERM, handleSigterm) }
+
     private var addr: String {
         ((try? ConfigStore.load()).map { ConfigStore.httpConfig(from: $0).addr })
             ?? "127.0.0.1:18427"
@@ -1966,9 +1973,31 @@ final class ServerProcess {
         q.async {
             self.stopping = false
             self.attempts = 0
+            self.killStaleListener() // T13 fix: sweep port orphans (SIGKILL etc.)
             self.killChild()
             self.spawn()
         }
+    }
+
+    /// T13 fix: kill any leftover process still LISTENing on our port (SIGKILL
+    /// orphans, prior crashes) so the new child can bind. No-op when free.
+    private func killStaleListener() {
+        guard let colon = addr.lastIndex(of: ":") else { return }
+        let port = String(addr[addr.index(after: colon)...])
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        p.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            p.waitUntilExit()
+            let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            for line in out.split(whereSeparator: \.isNewline) {
+                if let pid = Int32(line.trimmingCharacters(in: .whitespaces)) { kill(pid, SIGTERM) }
+            }
+        } catch {}
     }
 
     func restart() { start() }
@@ -2015,6 +2044,7 @@ final class ServerProcess {
         do {
             try p.run()
             proc = p
+            ServerProcess.childPid.store(p.processIdentifier, ordering: relaxed) // T13 fix
             startHealth()
         } catch {
             errTail = "spawn failed: \(error.localizedDescription)"
@@ -2038,6 +2068,7 @@ final class ServerProcess {
     private func killChild() {
         guard let p = proc else { return }
         proc = nil
+        ServerProcess.childPid.store(0, ordering: relaxed) // T13 fix
         if p.isRunning {
             p.terminate() // SIGTERM
             let deadline = Date().addingTimeInterval(3)
@@ -2074,6 +2105,15 @@ final class ServerProcess {
             self.onStateChange?(s)
         }
     }
+}
+
+/// T13 fix: SIGTERM (killall / force-quit) does not run applicationWillTerminate.
+/// No captures → converts to a C function pointer; body is async-signal-safe
+/// (lock-free atomic load + kill(2) + _exit(3)).
+private func handleSigterm(_ sig: Int32) {
+    let pid = ServerProcess.childPid.load(ordering: relaxed)
+    if pid > 0 { kill(pid, SIGTERM) }
+    _exit(143)
 }
 ```
 
