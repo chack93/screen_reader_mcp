@@ -1936,6 +1936,15 @@ import AppKit
 import Foundation
 import ScreenReaderKit
 
+/// T13 fix: child pid for the SIGTERM handler. Written on q in spawn()/killChild().
+/// SIGTERM (killall / force-quit) never runs applicationWillTerminate, so the
+/// handler kills the child directly. The Go server does not trap SIGTERM.
+/// T13 fix-round note: UnsafeAtomic lives in Synchronization (macOS 15+); the
+/// package targets macOS 13, so a plain aligned Int32 is used — a 32-bit
+/// aligned load/store is lock-free on arm64/x86_64, and global literal init
+/// is static, so the handler never races lazy initialization.
+private var sigChildPid: Int32 = 0
+
 /// Spawns and supervises the embedded Go server (`screenreader --http`):
 /// SIGTERM on quit, auto-restart with backoff after crashes, /health polling
 /// for state. All mutable process bookkeeping lives on one serial queue.
@@ -1953,11 +1962,6 @@ final class ServerProcess {
     private var stopping = false
     private var healthTimer: Timer?
     private let q = DispatchQueue(label: "screenreader.server")
-
-    /// T13 fix: child pid for the SIGTERM handler. Written on q in spawn()/killChild().
-    /// SIGTERM (killall / force-quit) never runs applicationWillTerminate, so the
-    /// handler kills the child directly. The Go server does not trap SIGTERM.
-    private static let childPid = UnsafeAtomic<Int32>(0)
 
     init() { signal(SIGTERM, handleSigterm) }
 
@@ -2044,7 +2048,7 @@ final class ServerProcess {
         do {
             try p.run()
             proc = p
-            ServerProcess.childPid.store(p.processIdentifier, ordering: relaxed) // T13 fix
+            sigChildPid = p.processIdentifier // T13 fix
             startHealth()
         } catch {
             errTail = "spawn failed: \(error.localizedDescription)"
@@ -2068,7 +2072,7 @@ final class ServerProcess {
     private func killChild() {
         guard let p = proc else { return }
         proc = nil
-        ServerProcess.childPid.store(0, ordering: relaxed) // T13 fix
+        sigChildPid = 0 // T13 fix
         if p.isRunning {
             p.terminate() // SIGTERM
             let deadline = Date().addingTimeInterval(3)
@@ -2111,7 +2115,7 @@ final class ServerProcess {
 /// No captures → converts to a C function pointer; body is async-signal-safe
 /// (lock-free atomic load + kill(2) + _exit(3)).
 private func handleSigterm(_ sig: Int32) {
-    let pid = ServerProcess.childPid.load(ordering: relaxed)
+    let pid = sigChildPid
     if pid > 0 { kill(pid, SIGTERM) }
     _exit(143)
 }
