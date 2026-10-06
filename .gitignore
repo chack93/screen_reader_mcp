@@ -1,3 +1,5 @@
 server/screenreader
 *.png
 .DS_Store
+app/.build/
+app/build/
