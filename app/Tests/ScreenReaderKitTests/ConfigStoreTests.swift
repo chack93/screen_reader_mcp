@@ -71,6 +71,19 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual((back["keep"] as? [String: Any])?["nested"] as? Bool, true)
     }
 
+    func testSaveOverwritesExistingAtomically() throws {
+        let p = tmpConfig()
+        defer { try? FileManager.default.removeItem(atPath: p) }
+        try ConfigStore.save(["app": "First", "keep": 1], path: p)
+        // A crash between remove and rename used to lose the file; the POSIX
+        // rename must replace the existing config in one step.
+        try ConfigStore.save(["app": "Second"], path: p)
+        let back = try ConfigStore.load(path: p)
+        XCTAssertEqual(back["app"] as? String, "Second")
+        XCTAssertNil(back["keep"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: p + ".sr-tmp"))
+    }
+
     func testSaveCreatesParentDirs() throws {
         let p = NSTemporaryDirectory() + "sr-nested-\(UUID().uuidString)/a/b/config.json"
         defer { try? FileManager.default.removeItem(atPath: p) }

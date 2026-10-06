@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -44,10 +45,9 @@ public enum ConfigStore {
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         do {
             try data.write(to: URL(fileURLWithPath: tmp), options: .atomic)
-            if FileManager.default.fileExists(atPath: path) {
-                try FileManager.default.removeItem(atPath: path)
-            }
-            try FileManager.default.moveItem(atPath: tmp, toPath: path)
+            // POSIX rename replaces an existing destination atomically on the same
+            // volume (tmp is path + ".sr-tmp", i.e. same directory by construction).
+            guard Darwin.rename(tmp, path) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         } catch {
             try? FileManager.default.removeItem(atPath: tmp)
             throw ConfigError.notObject
