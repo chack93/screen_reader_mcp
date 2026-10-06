@@ -76,3 +76,43 @@ func TestSaveLoad_roundTrip(t *testing.T) {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 }
+
+func TestDefaults_http(t *testing.T) {
+	c := Defaults()
+	if c.HTTP.Addr != "127.0.0.1:18427" || c.HTTP.Token != "" {
+		t.Fatalf("unexpected http defaults: %+v", c.HTTP)
+	}
+}
+
+func TestLoad_httpOverride(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(p, []byte(`{"http":{"addr":"127.0.0.1:19999","token":"abc"}}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if c.HTTP.Addr != "127.0.0.1:19999" || c.HTTP.Token != "abc" {
+		t.Fatalf("http not loaded: %+v", c.HTTP)
+	}
+	if c.Mode != "app" || c.Capture.MaxWidth != 1600 {
+		t.Fatalf("defaults not filled: %+v", c)
+	}
+}
+
+func TestSaveLoad_httpRoundTrip(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	c := Defaults()
+	c.HTTP.Token = "t0k"
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.HTTP != c.HTTP {
+		t.Fatalf("round-trip mismatch: %+v vs %+v", got.HTTP, c.HTTP)
+	}
+}

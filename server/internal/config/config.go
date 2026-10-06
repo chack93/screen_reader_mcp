@@ -27,6 +27,11 @@ type InputCfg struct {
 	DelayMs int `json:"delay_ms"`
 }
 
+type HTTPCfg struct {
+	Addr  string `json:"addr"`  // loopback only, e.g. "127.0.0.1:18427"
+	Token string `json:"token"` // bearer token for /mcp; empty = unauthenticated
+}
+
 type Config struct {
 	Version int        `json:"version"`
 	App     string     `json:"app"`
@@ -36,6 +41,7 @@ type Config struct {
 	OCR     OCRCfg     `json:"ocr"`
 	Capture CaptureCfg `json:"capture"`
 	Input   InputCfg   `json:"input"`
+	HTTP    HTTPCfg    `json:"http"`
 }
 
 // DefaultPath returns $HOME/.config/screenreader/config.json.
@@ -53,6 +59,7 @@ func Defaults() *Config {
 		OCR:     OCRCfg{Languages: []string{"en"}, Level: "accurate"},
 		Capture: CaptureCfg{MaxWidth: 1600},
 		Input:   InputCfg{DelayMs: 120},
+		HTTP:    HTTPCfg{Addr: "127.0.0.1:18427"},
 	}
 }
 
