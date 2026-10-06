@@ -378,7 +378,7 @@ func NewTokenAuth(source TokenSource, next http.Handler) http.Handler {
 	verifier := func(ctx context.Context, token string, req *http.Request) (*auth.TokenInfo, error) {
 		want := source()
 		if want == "" || subtle.ConstantTimeCompare([]byte(want), []byte(token)) != 1 {
-			return nil, fmt.Errorf("invalid token")
+			return nil, auth.ErrInvalidToken // SDK maps THIS error to 401; others → 500 (T3 finding)
 		}
 		// Static local token: report a fresh expiry the middleware accepts.
 		return &auth.TokenInfo{Expiration: time.Now().Add(time.Hour)}, nil
