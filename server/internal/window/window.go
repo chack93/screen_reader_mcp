@@ -5,6 +5,7 @@ package window
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -27,6 +28,9 @@ func runAppleScript(script string) (string, error) {
 			return "", fmt.Errorf("osascript: %s", strings.TrimSpace(string(ee.Stderr)))
 		}
 		return "", err
+	}
+	if os.Getenv("SR_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "SR_DEBUG script: %s\nSR_DEBUG output: %q\n", script, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -72,7 +76,9 @@ tell application "System Events"
     set idx to idx + 1
     set p to position of w
     set s to size of w
-    set end of out to (idx & tab & (title of w) & tab & (item 1 of p) & tab & (item 2 of p) & tab & (item 1 of s) & tab & (item 2 of s))
+    -- NOTE: macOS 27 AppleScript returns a LIST for "number & text" (classic
+    -- AppleScript coerced to text), so every numeric field is cast "as text".
+    set end of out to ((idx as text) & tab & (title of w) & tab & ((item 1 of p) as text) & tab & ((item 2 of p) as text) & tab & ((item 1 of s) as text) & tab & ((item 2 of s) as text))
   end repeat
   set AppleScript's text item delimiters to linefeed
   return out as text
@@ -150,7 +156,8 @@ tell application "System Events"
         set pn to name of p
         set pos to position of w
         set sz to size of w
-        set end of out to (pn & tab & (title of w) & tab & (item 1 of pos) & tab & (item 2 of pos) & tab & (item 1 of sz) & tab & (item 2 of sz))
+        -- "as text" casts: macOS 27 AppleScript returns a LIST for "number & text".
+        set end of out to (pn & tab & (title of w) & tab & ((item 1 of pos) as text) & tab & ((item 2 of pos) as text) & tab & ((item 1 of sz) as text) & tab & ((item 2 of sz) as text))
       end repeat
     end try
   end repeat
