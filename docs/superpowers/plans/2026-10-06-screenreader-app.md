@@ -1611,10 +1611,13 @@ public enum TCCPermission: String, CaseIterable {
     }
 
     /// Harmless System Events AppleScript — exit 0 only when Automation is granted.
+    /// T11 finding: `to return 1` (literal) sends NO Apple event, so TCC is never
+    /// exercised; `to get name` (a real property query) does. Matches the Go
+    /// precedent in server/internal/perms/perms.go.
     static func probeAutomation() -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "tell application \"System Events\" to return 1"]
+        p.arguments = ["-e", "tell application \"System Events\" to get name"]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do {
