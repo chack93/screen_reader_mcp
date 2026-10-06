@@ -2855,6 +2855,8 @@ Notes:
 
 - [ ] **Step 2: AGENTS.md — replace the refactor warning bullet**
 
+Note: `AGENTS.md` and `TODO.md` are **not tracked by git** in this repo (keep them that way — edit in the workspace; do not `git add` them unless the user asks).
+
 Replace the bullet starting `TODO.md describes a future Swift menu-bar app refactor` with:
 
 ```markdown
@@ -2871,7 +2873,7 @@ Change the top-level item and its sub-bullets from `- ` to `+ ` (the file's own 
 cd server && CGO_ENABLED=1 go vet ./... && CGO_ENABLED=1 go test ./... && cd ..
 (cd app && swift test)
 ./build.sh
-git add README.md AGENTS.md TODO.md
+git add README.md   # AGENTS.md/TODO.md edits stay untracked (see note above)
 git commit -m "docs: app setup, permissions, endpoint + token notes"
 ```
 
