@@ -55,3 +55,66 @@ func TestHealthHandler(t *testing.T) {
 		t.Fatalf("POST status %d, want 405", resp2.StatusCode)
 	}
 }
+
+func TestNewTokenAuth(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	var tok string // the live token source
+	ts := httptest.NewServer(NewTokenAuth(func() string { return tok }, inner))
+	defer ts.Close()
+
+	// no token configured → passthrough without any header
+	resp, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("passthrough status %d", resp.StatusCode)
+	}
+
+	// token appears in config → next request must be authenticated
+	tok = "sekret"
+	r1, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing header: status %d, want 401", r1.StatusCode)
+	}
+
+	req, _ := http.NewRequest("GET", ts.URL, nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	r2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong token: status %d, want 401", r2.StatusCode)
+	}
+
+	req.Header.Set("Authorization", "Bearer sekret")
+	r3, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r3.Body.Close()
+	if r3.StatusCode != 200 {
+		t.Fatalf("good token: status %d, want 200", r3.StatusCode)
+	}
+
+	// token removed again → passthrough (live rotation both ways)
+	tok = ""
+	r4, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r4.Body.Close()
+	if r4.StatusCode != 200 {
+		t.Fatalf("revoked-token passthrough: status %d", r4.StatusCode)
+	}
+}
