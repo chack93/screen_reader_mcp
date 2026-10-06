@@ -98,7 +98,9 @@ http://127.0.0.1:18427/mcp
 ### 4.1 Stack
 
 - **AppKit** (not SwiftUI — the flipped-coordinate full-screen overlay and multi-display windows are
-  first-class in AppKit). Xcode project in `app/`.
+  first-class in AppKit). Swift Package in `app/` plus a root `build.sh` that assembles and signs
+  the `.app` bundle (no committed `.xcodeproj`; validated by spike — fast builds, `swift test` in
+  seconds, same AppKit result).
 - `LSUIElement` = true (menu bar only, no dock icon). App name `ScreenReader`,
   bundle ID `dev.chack.screenreader`.
 - Ships the Go binary at `Contents/Resources/screenreader` (copied by `build.sh`, §11).
@@ -215,7 +217,9 @@ The diff is deliberately small: one flag, one config section, a mux, one middlew
   - `GET /health` — **unauthenticated**, returns
     `{"ok": true, "name": "screenreader", "version": "<v>", "addr": "127.0.0.1:18427"}`. No secrets.
   - `/mcp` — `mcp.NewStreamableHTTPHandler` (SDK v1.8.0) serving the shared server, wrapped with the
-    SDK `auth.RequireBearerToken` middleware when a token is configured.
+    SDK `auth.RequireBearerToken` middleware when a token is configured. The handler is configured
+    with `StreamableHTTPOptions{JSONResponse: true}` — responses are plain JSON (the in-app client
+    still tolerates SSE bodies).
 - Token is **re-read from config per request** (same live-re-read pattern as actions) — rotation by
   editing config takes effect immediately.
 - No token configured → HTTP mode still runs unauthenticated, but logs one loud warning to stderr.
@@ -244,10 +248,11 @@ README gains an "HTTP mode / app" section (§12).
   parent app. The Go binary is spawned by the app, so its screen capture, synthetic input, and
   AppleScript run under **the app's grants** — this is why helper processes inherit their parent
   app's permissions on macOS.
-- **Risk & gate:** attribution is the single external assumption of this design. **Task 1 of the
-  implementation plan is the Test-capture canary** (§4.2): app grants → Go child → non-black image.
-  If it ever fails, the design escalates to Option B (Swift-native low-level layer, Go reduced to
-  the protocol layer) — a fallback decision, not part of v1.
+- **Risk & gate:** attribution is the single external assumption of this design. **Plan task 14 is
+  the Test-capture canary** (§4.2): app grants → Go child → non-black image — and plan task 17
+  re-runs it as the final integration gate. If it ever fails, stop and escalate to Option B
+  (Swift-native low-level layer, Go reduced to the protocol layer) — a fallback decision, not
+  part of v1.
 - TCC grants are evaluated by the OS at request time; after granting, the app may need a relaunch to
   refresh cached status (noted in the UI).
 
@@ -304,24 +309,25 @@ README gains an "HTTP mode / app" section (§12).
 ```
 screen_reader/
   server/                      # Go engine (existing)
-    main.go                    # + --http flag, mux, /health, token middleware
-    internal/…                 # unchanged
-  app/                         # NEW
-    ScreenReader.xcodeproj
-    ScreenReader/
-      AppDelegate.swift        # menu bar item, server lifecycle (spawn/restart/kill)
-      SettingsWindow.swift     # Permissions / Target / Server sections
-      RectOverlay.swift        # per-display flipped overlay for rect drawing
-      MCPClient.swift          # initialize + tools/call over HTTP
-      ConfigStore.swift        # load/merge/save config.json (preserves keys)
-      Permissions.swift        # TCC preflight + request
-    ScreenReaderTests/         # config merge, rect normalization
-  build.sh                     # NEW: go build → copy binary into bundle → codesign
+    main.go                    # + --http flag; mux /health + /mcp
+    internal/httpmode/         # NEW: loopback validation, /health, token middleware
+    internal/config/           # + http section (addr, token)
+    internal/…                 # otherwise unchanged
+  app/                         # NEW — Swift Package (SPM)
+    Package.swift
+    Info.plist                 # LSUIElement, bundle id — build.sh embeds it in the bundle
+    Sources/ScreenReaderKit/   # pure logic: ConfigStore, RectMath, Snippet, WindowLine,
+                               #   Backoff, CaptureCheck, MCPClient, Permissions
+    Sources/ScreenReader/      # AppKit app: main, AppDelegate, ServerProcess,
+                               #   SettingsWindow, RectOverlay
+    Tests/ScreenReaderKitTests/
+  build.sh                     # NEW: go build → swift build → assemble .app → codesign
   docs/superpowers/specs/      # + this spec
   README.md                    # + HTTP mode / app section
 ```
 
-No CI (consistent with the repo today). Gate changes on `go vet` + `go test` and the Xcode build.
+No CI (consistent with the repo today). Gate changes on `go vet` + `go test` and the Swift Package
+build + `swift test`.
 
 ## 12. Documentation updates
 
