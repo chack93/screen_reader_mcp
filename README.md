@@ -76,6 +76,29 @@ Add the MCP server entry to `~/.config/opencode/opencode.json` (or the project's
 
 opencode spawns the binary and talks to it over stdio.
 
+## HTTP mode (manual)
+
+Besides stdio, the server can serve MCP over **Streamable HTTP** on a loopback address:
+
+```bash
+cd server && CGO_ENABLED=1 go build -o screenreader .
+./screenreader --http
+# → screenreader serving MCP over Streamable HTTP on http://127.0.0.1:18427/mcp
+```
+
+The address and bearer token come from the `http` section of `~/.config/screenreader/config.json`:
+
+```json
+"http": { "addr": "127.0.0.1:18427", "token": "..." }
+```
+
+- `addr` must be loopback (127.0.0.1 or ::1); anything else is refused at startup.
+- With `token` set, clients must send `Authorization: Bearer <token>`; token edits apply on the next request. Without a token the endpoint is unauthenticated (a warning is logged).
+- `GET /health` reports liveness without auth (the menu-bar app uses it).
+- In opencode: `"type": "remote"`, `"url": "http://127.0.0.1:18427/mcp"`, `"oauth": false`, plus the `Authorization` header when a token is set.
+
+The recommended way to run HTTP mode is the ScreenReader menu-bar app (see below).
+
 ## Tools
 
 | Tool | Purpose | Key args |
