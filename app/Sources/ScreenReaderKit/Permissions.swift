@@ -29,10 +29,12 @@ public enum TCCPermission: String, CaseIterable {
     }
 
     /// Harmless System Events AppleScript — exit 0 only when Automation is granted.
+    /// Uses `get name` (a property query) because a literal `return` in a `tell` block
+    /// sends no Apple event, so it would never exercise the TCC Automation check.
     static func probeAutomation() -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "tell application \"System Events\" to return 1"]
+        p.arguments = ["-e", "tell application \"System Events\" to get name"]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do {
