@@ -2558,7 +2558,7 @@ Create `app/Sources/ScreenReader/SettingsWindow.swift`:
 import AppKit
 import ScreenReaderKit
 
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let server: ServerProcess
     private var permStatus: [TCCPermission: NSTextField] = [:]
     private var grantButton: NSButton!
@@ -2580,6 +2580,7 @@ final class SettingsWindowController: NSWindowController {
         win.title = "ScreenReader"
         win.center()
         super.init(window: win)
+        win.delegate = self // T16 fix: stop the refresh timer on window close
         build()
         refresh()
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
@@ -2589,6 +2590,11 @@ final class SettingsWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("not used") }
     deinit { timer?.invalidate() }
+
+    // T16 fix: the 2s timer must not outlive the window — otherwise the
+    // .automation probe (osascript spawn + waitUntilExit) stalls the main
+    // thread every 2s for the app's whole life (settingsWC was never nilled).
+    func windowWillClose(_ notification: Notification) { timer?.invalidate() }
 
     // MARK: - Build
 
@@ -2849,7 +2855,11 @@ In `AppDelegate.swift`:
     private var settingsWC: SettingsWindowController?
 
     @objc private func openSettings() {
-        if settingsWC == nil { settingsWC = SettingsWindowController(server: server) }
+        // T16 fix: replace a controller whose window was closed, so the old
+        // one (and its now-invalidated timer) deallocates; reuse a visible one.
+        if settingsWC == nil || settingsWC?.window == nil || !(settingsWC?.window?.isVisible ?? false) {
+            settingsWC = SettingsWindowController(server: server)
+        }
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
