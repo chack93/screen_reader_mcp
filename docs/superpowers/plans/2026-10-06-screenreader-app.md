@@ -2796,6 +2796,11 @@ final class SettingsWindowController: NSWindowController {
         saveTarget(ConfigStore.Target(app: w.app, title: w.title, mode: "app", x: 0, y: 0, w: 0, h: 0))
     }
 
+    // T16 fix (T15 precedent): retain the overlay — a local `o` would deallocate
+    // when selectRect() returns (onResult captures only [weak self]=controller),
+    // so onResult would never fire on a real drag.
+    private var rectOverlay: RectOverlay?
+
     @objc private func selectRect() {
         let o = RectOverlay()
         o.onResult = { [weak self] x, y, w, h in
@@ -2804,6 +2809,7 @@ final class SettingsWindowController: NSWindowController {
                                                     x: x, y: y, w: w, h: h))
             }
         }
+        rectOverlay = o
         o.present()
     }
 
