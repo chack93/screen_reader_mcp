@@ -4,6 +4,11 @@ import ScreenReaderKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     let server = ServerProcess()
+    /// Retains the overlay during a drag: the local `o` in devDraw() would
+    /// deallocate on return (DragView.onFinish captures it only [weak self]),
+    /// and then `guard let self` in onFinish fails → onResult never fires and
+    /// both per-display windows stay stuck on screen.
+    private var overlay: RectOverlay?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureToken()
@@ -140,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func devDraw() {
         let o = RectOverlay()
         o.onResult = { x, y, w, h in NSLog("rect = %d, %d, %d, %d", x, y, w, h) }
+        overlay = o
         o.present()
     }
 }
