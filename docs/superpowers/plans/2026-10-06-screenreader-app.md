@@ -2499,9 +2499,15 @@ In `applicationDidFinishLaunching`, after the `Test capture…` loop (Task 14 co
 And at the end of the class:
 
 ```swift
+    // T15 fix: retain the overlay for the drag's lifetime — devDraw's local `o`
+    // would otherwise deallocate on return (onFinish only holds it weakly), so
+    // onResult would never fire and both windows would stay up.
+    private var overlay: RectOverlay?
+
     @objc private func devDraw() {
         let o = RectOverlay()
         o.onResult = { x, y, w, h in NSLog("rect = %d, %d, %d, %d", x, y, w, h) }
+        overlay = o
         o.present()
     }
 ```
