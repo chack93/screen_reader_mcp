@@ -10,6 +10,40 @@ It treats the Remote Desktop **window** as a controllable "virtual screen": it c
 
 The server is complete: all 17 tools are registered and verified over stdio (ListTools smoke passed). Live on-screen verification of capture/OCR/synthetic input requires the three macOS permissions below — grant them before expecting non-black captures or working input.
 
+## ScreenReader app (recommended)
+
+The **ScreenReader** menu-bar app hosts the server for you and owns the macOS
+permissions — grant them once to the app instead of to every terminal.
+
+```bash
+./build.sh                       # builds server + app → app/build/ScreenReader.app
+open app/build/ScreenReader.app
+```
+
+1. First run: click **Grant access** and approve the three prompts (Screen
+   Recording, Accessibility, Automation). Confirm with menu → **Test capture…**.
+2. Open the window → pick the target: select a window from the list, or draw a
+   rectangle over the screen.
+3. **Copy opencode config** → merge the snippet into your `opencode.json` under
+   `mcp.servers`. Any agent then reaches the MCP endpoint at
+   `http://127.0.0.1:18427/mcp` while the app is open.
+
+Notes:
+
+- The endpoint is **loopback-only** and protected by a bearer token stored in
+  `~/.config/screenreader/config.json` (`http.token`) — rotate it by editing the
+  file; it takes effect on the next request. Keep the snippet in the app window
+  in sync after rotating.
+- Quitting the app stops the MCP endpoint (start the app again to serve).
+- One-time identity (recommended): Keychain Access → Certificate Assistant →
+  Create a New Certificate → name **ScreenReader Dev**, kind Code Signing,
+  self-signed, login keychain. Without it, builds are ad-hoc-signed and macOS
+  asks for permissions again after every rebuild.
+- The app writes only `app`/`title`/`mode`/`rect`/`http` keys to the shared
+  config; `ocr`/`capture`/`input` edits keep working.
+- Build/test: `cd app && swift build && swift test` (Kit logic is unit-tested;
+  the GUI + TCC behavior is verified via the menu → Test capture canary).
+
 ## Prerequisites
 
 - macOS (with the Remote Desktop client window you want to drive visible on screen)
