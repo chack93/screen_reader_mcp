@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"screenreader/internal/capture"
+	"screenreader/internal/colist"
 	"screenreader/internal/config"
 	"screenreader/internal/geom"
 	"screenreader/internal/input"
@@ -466,7 +467,15 @@ func RegisterTarget(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "list_windows", Description: "List visible windows (app, title, bounds) to choose a target."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
-			wins, err := window.List()
+			wins, err := fastListWindows()
+			if err != nil || len(wins) == 0 {
+				// Fall back to the (slow but dependency-free) AppleScript walk.
+				// An empty CGWindowList result counts as a miss: on recent
+				// macOS the window list is only populated for processes with
+				// Screen Recording, so a bare shell/server without the grant
+				// sees zero windows.
+				wins, err = window.List()
+			}
 			if err != nil {
 				return errResult(err), nil, nil
 			}
@@ -533,6 +542,24 @@ func RegisterTarget(server *mcp.Server) {
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
 		})
+}
+
+// fastListWindows enumerates visible windows without touching per-window
+// Apple events: one CGWindowListCopyWindowInfo call for geometry/titles plus
+// one batched System Events query to map PIDs to process names (the names
+// Resolve/Focus accept). Takes ~1s total; window.List() takes 30-50s on
+// machines with many apps because System Events round-trips every window of
+// every process.
+func fastListWindows() ([]window.Win, error) {
+	raws, err := colist.List()
+	if err != nil {
+		return nil, err
+	}
+	procs, err := window.ProcessIndex()
+	if err != nil {
+		return nil, err
+	}
+	return window.MergeWindows(raws, procs), nil
 }
 
 // permLine renders one permission status line for the doctor report.
