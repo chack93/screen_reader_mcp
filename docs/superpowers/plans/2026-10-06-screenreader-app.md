@@ -899,13 +899,21 @@ git commit -m "feat(app): Swift package skeleton — menu-bar app, bundle build 
 - Consumes: `build.sh` identity detection (Task 5).
 - Produces: a `ScreenReader Dev` codesigning identity in the login keychain so TCC grants survive app rebuilds (spec §4.6).
 
-- [ ] **Step 1: PAUSE — ask the user to create the identity**
+- [x] **Step 1: PAUSE — ask the user to create the identity**
+
+  **2026-10-07 docs(plan) correction — this CAN be scripted**, done controller-side with user go-ahead (no GUI):
+  `openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 3650 -subj "/CN=ScreenReader Dev"
+  -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,digitalSignature"
+  -addext "extendedKeyUsage=critical,codeSigning"` → re-export the p12 with `-legacy -certpbe PBE-SHA1-3DES
+  -keypbe PBE-SHA1-3DES -macalg sha1` (OpenSSL ≥3 defaults break `security import` MAC verification) →
+  `security import sr.p12 -k ~/Library/Keychains/login.keychain-db -P pw -T /usr/bin/codesign` →
+  `security add-trusted-cert -p codeSign cert.pem`.
 
 Tell the user (this cannot be scripted): Keychain Access → menu **Certificate Assistant → Create a New Certificate…** → Name: `ScreenReader Dev`, Certificate Type: **Code Signing**, Identity Type: **Self Signed Certificate**, Where to Save: **Login** keychain.
 
 Wait for confirmation before continuing. (If the user skips it, everything still works — but permissions must be re-granted after every app rebuild.)
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify** — identity valid; build → `Authority=ScreenReader Dev`, DR = `identifier "dev.chack.screenreader" and certificate leaf = H"b705e67e…"`; TCC csreq blobs cert-bound (SHA-1, no cdhash); forced-cdhash-change rebuild → grants survived, capture returned live pixels, zero re-grants.
 
 ```bash
 security find-identity -v -p codesigning | grep "ScreenReader Dev"
@@ -915,7 +923,7 @@ codesign -dvv app/build/ScreenReader.app 2>&1 | grep -v "^Executable" | head -6
 # expect Authority=ScreenReader Dev (NOT "flags=0x2(adhoc)")
 ```
 
-- [ ] **Step 3: No commit** (no files change — environment step only; proceed to Task 7).
+- [x] **Step 3: No commit** (no files change — environment step only; proceed to Task 7).
 
 ---
 
