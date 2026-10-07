@@ -170,7 +170,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         // Sync the segment ONLY when the stored mode actually changed, so a
         // user mid-selection in Rectangle mode isn't snapped back every 2 s.
-        let key = (t.mode == "rect" && t.w > 0) ? "rect" : "app"
+        // Derive the key from the stored mode directly (modeChanged persists
+        // the mode immediately, so an unsaved/zero rect never fights the UI).
+        let key = t.mode == "rect" ? "rect" : "app"
         if key != lastModeKey {
             lastModeKey = key
             segmented.selectedSegment = key == "rect" ? 1 : 0
@@ -191,8 +193,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func modeChanged() {
-        lastModeKey = segmented.selectedSegment == 1 ? "rect" : "app"
+        let key = segmented.selectedSegment == 1 ? "rect" : "app"
+        guard key != lastModeKey else { return }
+        lastModeKey = key
         updateModeRows()
+        // T17 defect fix: persist the mode right away. Otherwise the 2 s
+        // reload timer sees the stale stored mode, snaps the segment back and
+        // hides this row mid-selection (only the rect→rect leg was previously
+        // protected via lastModeKey). Keeps every later reload consistent.
+        var t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
+        t.mode = key
+        saveTarget(t)
     }
 
     @objc private func refreshPicker() {
