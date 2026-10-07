@@ -1,7 +1,7 @@
 import AppKit
 import ScreenReaderKit
 
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let server: ServerProcess
     private var permStatus: [TCCPermission: NSTextField] = [:]
     private var grantButton: NSButton!
@@ -23,6 +23,7 @@ final class SettingsWindowController: NSWindowController {
         win.title = "ScreenReader"
         win.center()
         super.init(window: win)
+        win.delegate = self   // T16 fix: stop the refresh timer when the window closes
         build()
         refresh()
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
@@ -31,7 +32,13 @@ final class SettingsWindowController: NSWindowController {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-    deinit { timer?.invalidate() }
+    deinit { timer?.invalidate() }   // belt-and-braces
+
+    /// The 2 s refresh timer must NOT outlive the window: every tick runs the
+    /// .automation probe (a blocking osascript + waitUntilExit, ~100–300 ms) on
+    /// the main thread. Without this, closing the window leaves that stall
+    /// running for the app's entire life (settingsWC is cached in AppDelegate).
+    func windowWillClose(_ notification: Notification) { timer?.invalidate() }
 
     // MARK: - Build
 

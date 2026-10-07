@@ -30,7 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func restartServer() { server.restart() }
 
     @objc private func openSettings() {
-        if settingsWC == nil { settingsWC = SettingsWindowController(server: server) }
+        // T16 fix: replace a controller whose window was closed, so the old
+        // one (and its now-invalidated timer) deallocates; reuse a visible one.
+        if settingsWC == nil || settingsWC?.window == nil || !(settingsWC?.window?.isVisible ?? false) {
+            settingsWC = SettingsWindowController(server: server)
+        }
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
