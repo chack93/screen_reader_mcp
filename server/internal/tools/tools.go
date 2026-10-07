@@ -466,7 +466,7 @@ func RegisterTarget(server *mcp.Server) {
 			}}}, nil, nil
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "list_windows", Description: "List visible windows (app, title, bounds) to choose a target."},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_windows", Description: "List visible and minimized windows (app, title, bounds) to choose a target."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
 			wins, err := fastListWindows()
 			if err != nil || len(wins) == 0 {

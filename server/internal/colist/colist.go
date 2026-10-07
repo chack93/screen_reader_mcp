@@ -53,12 +53,12 @@ static int colist_scan(ColistWin **out) {
     CFTypeRef v;
     // Documented keys are X/Y/W/H, but recent macOS returns X/Y/Width/Height —
     // read both spellings so the code is version-agnostic.
-    if ((v = CFDictionaryGetValue(b, CFSTR("X"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &x);
-    if ((v = CFDictionaryGetValue(b, CFSTR("Y"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &y);
-    if ((v = CFDictionaryGetValue(b, CFSTR("W"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
-    else if ((v = CFDictionaryGetValue(b, CFSTR("Width"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
-    if ((v = CFDictionaryGetValue(b, CFSTR("H"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
-    else if ((v = CFDictionaryGetValue(b, CFSTR("Height"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
+    if ((v = CFDictionaryGetValue(b, CFSTR("X"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &x);
+    if ((v = CFDictionaryGetValue(b, CFSTR("Y"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &y);
+    if ((v = CFDictionaryGetValue(b, CFSTR("W"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
+    else if ((v = CFDictionaryGetValue(b, CFSTR("Width"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
+    if ((v = CFDictionaryGetValue(b, CFSTR("H"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
+    else if ((v = CFDictionaryGetValue(b, CFSTR("Height"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
     if (w <= 0 || h <= 0) continue;
     char *title = NULL;
     CFTypeRef tv = CFDictionaryGetValue(d, kCGWindowName);
@@ -135,6 +135,6 @@ func List() ([]window.CGWin, error) {
 			})
 		}
 	}
-	C.colist_free(recs, n) // cgo forbids defer with C args — free explicitly
+	C.colist_free(recs, n) // freed after Go has copied every field (no defer needed)
 	return out, nil
 }
