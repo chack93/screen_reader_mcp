@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum MCPClientError: Error {
     case unauthorized
@@ -9,12 +10,18 @@ public enum MCPClientError: Error {
 /// Minimal MCP client over Streamable HTTP: initialize handshake + tools/call.
 /// The server is configured for JSON responses; SSE `data:` frames are tolerated.
 public final class MCPClient: @unchecked Sendable {
+    private struct State {
+        var sessionId: String?
+        var ready = false
+    }
+
     private let baseURL: URL
     private let token: String?
     private let session: URLSession
-    private let lock = NSLock()
-    private var sessionId: String?
-    private var ready = false
+    // OSAllocatedUnfairLock instead of NSLock: lock()/unlock() are unavailable
+    // from async contexts (Swift 6 error); withLock is a synchronous scoped
+    // critical section and this is exactly the short, non-suspending use.
+    private let state = OSAllocatedUnfairLock(initialState: State())
 
     public init(baseURL: URL, token: String? = nil,
                 session: URLSession = URLSession(configuration: .ephemeral)) {
@@ -49,9 +56,7 @@ public final class MCPClient: @unchecked Sendable {
     }
 
     private func ensureReady() async throws {
-        lock.lock()
-        let was = ready
-        lock.unlock()
+        let was = state.withLock { $0.ready }
         guard !was else { return }
         _ = try await send(id: 1, method: "initialize", params: [
             "protocolVersion": "2025-06-18",
@@ -59,9 +64,7 @@ public final class MCPClient: @unchecked Sendable {
             "clientInfo": ["name": "screenreader-app", "version": "0.1.0"],
         ])
         try await send(method: "notifications/initialized", params: [String: Any]())
-        lock.lock()
-        ready = true
-        lock.unlock()
+        state.withLock { $0.ready = true }
     }
 
     @discardableResult
@@ -79,9 +82,7 @@ public final class MCPClient: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        lock.lock()
-        if let sid = sessionId { req.setValue(sid, forHTTPHeaderField: "Mcp-Session-Id") }
-        lock.unlock()
+        if let sid = state.withLock({ $0.sessionId }) { req.setValue(sid, forHTTPHeaderField: "Mcp-Session-Id") }
 
         let (raw, resp): (Data, URLResponse)
         do { (raw, resp) = try await session.data(for: req) }
@@ -96,7 +97,7 @@ public final class MCPClient: @unchecked Sendable {
         }
         if let sid = http.value(forHTTPHeaderField: "Mcp-Session-Id") ??
             http.value(forHTTPHeaderField: "mcp-session-id") {
-            lock.lock(); sessionId = sid; lock.unlock()
+            state.withLock { $0.sessionId = sid }
         }
         guard !raw.isEmpty else { return [:] }
         // JSON body, or SSE frames — take the last data: line that carries an id.
