@@ -4,11 +4,7 @@ import ScreenReaderKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     let server = ServerProcess()
-    /// Retains the overlay during a drag: the local `o` in devDraw() would
-    /// deallocate on return (DragView.onFinish captures it only [weak self]),
-    /// and then `guard let self` in onFinish fails → onResult never fires and
-    /// both per-display windows stay stuck on screen.
-    private var overlay: RectOverlay?
+    private var settingsWC: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureToken()
@@ -32,6 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { rebuild() }
 
     @objc private func restartServer() { server.restart() }
+
+    @objc private func openSettings() {
+        if settingsWC == nil { settingsWC = SettingsWindowController(server: server) }
+        settingsWC?.showWindow(nil)
+        settingsWC?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     /// First run: give the config an http section with a bearer token.
     /// A malformed config is left untouched (the server logs its own error).
@@ -79,14 +82,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             line("\(p.rawValue): " + (p.isGranted ? "✓" : "✗"))
         }
         menu.addItem(.separator())
-        for (label, sel) in [("Restart server", #selector(restartServer)),
+        for (label, sel) in [("Open ScreenReader…", #selector(openSettings)),
+                             ("Restart server", #selector(restartServer)),
                              ("Test capture…", #selector(testCapture))] {
             let i = menu.addItem(withTitle: label, action: sel, keyEquivalent: "")
             i.target = self
         }
-        let draw = menu.addItem(withTitle: "DEV draw rect…",
-                                action: #selector(devDraw), keyEquivalent: "")
-        draw.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit ScreenReader",
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -140,12 +141,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.messageText = title
         a.informativeText = info
         a.runModal()
-    }
-
-    @objc private func devDraw() {
-        let o = RectOverlay()
-        o.onResult = { x, y, w, h in NSLog("rect = %d, %d, %d, %d", x, y, w, h) }
-        overlay = o
-        o.present()
     }
 }
