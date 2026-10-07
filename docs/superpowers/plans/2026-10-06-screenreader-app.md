@@ -2897,7 +2897,7 @@ git commit -m "feat(app): settings window — permissions, target picker, rect d
 
 **Files:** none — this task runs the spec §10 checklist on the dev Mac. Every step is a gate: if one fails, stop and fix before continuing. (The TCC-attribution canary already passed in Task 14; step 3 re-confirms it end-to-end.)
 
-- [ ] **Step 1: PAUSE — walk the checklist together with the user**
+- [x] **Step 1: PAUSE — walk the checklist together with the user** — all 8 steps passed 2026-10-07 on build 6a1fbff3; issues found+fixed during the walk: Swift mode-persistence (0070436), list_windows CGWindowList fast path (80d186c/fa97033/d4aebbf); ad-hoc signing ⇒ 3 re-grant cycles (Task 6 not done; step 8 noted, not a failure).
 
 Prereqs: Remote Desktop window open on screen; app built (`./build.sh`).
 
@@ -2910,7 +2910,7 @@ Prereqs: Remote Desktop window open on screen; app built (`./build.sh`).
 7. Quit the app → `curl -s http://127.0.0.1:18427/health` fails (endpoint gone); reopen → back within ~2s.
 8. Rebuild (`./build.sh`) + reopen → **no permission re-prompt** and Test capture still OK (self-signed identity holds). If the user skipped Task 6, expect re-grants — note it, don't treat as failure.
 
-- [ ] **Step 2: Record the outcome**
+- [x] **Step 2: Record the outcome**
 
 Fix forward anything found; then:
 
