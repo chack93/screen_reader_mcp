@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -552,14 +553,25 @@ func RegisterTarget(server *mcp.Server) {
 // every process.
 func fastListWindows() ([]window.Win, error) {
 	raws, err := colist.List()
+	procs, perr := window.ProcessIndex()
+	wins := window.MergeWindows(raws, procs)
+	if len(wins) == 0 {
+		// One diagnostic line per anomaly for T17 triage (window servers,
+		// attribution and TCC gating are invisible from the outside).
+		msg := fmt.Sprintf("list_windows empty: colist n=%d err=%v procs n=%d err=%v\n",
+			len(raws), err, len(procs), perr)
+		if err == nil && perr == nil && len(raws) > 0 && len(procs) > 0 {
+			msg += "  (windows+procs present but pid join empty — pids differ?)"
+		}
+		_ = os.WriteFile(filepath.Join(os.TempDir(), "sr-list-diag.txt"), []byte(msg), 0o644)
+	}
 	if err != nil {
 		return nil, err
 	}
-	procs, err := window.ProcessIndex()
-	if err != nil {
-		return nil, err
+	if perr != nil {
+		return nil, perr
 	}
-	return window.MergeWindows(raws, procs), nil
+	return wins, nil
 }
 
 // permLine renders one permission status line for the doctor report.

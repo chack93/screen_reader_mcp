@@ -43,10 +43,14 @@ static int colist_scan(ColistWin **out) {
     CFDictionaryRef b = (CFDictionaryRef)bv;
     double x = 0, y = 0, w = 0, h = 0;
     CFTypeRef v;
+    // Documented keys are X/Y/W/H, but recent macOS returns X/Y/Width/Height —
+    // read both spellings so the code is version-agnostic.
     if ((v = CFDictionaryGetValue(b, CFSTR("X"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &x);
     if ((v = CFDictionaryGetValue(b, CFSTR("Y"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &y);
     if ((v = CFDictionaryGetValue(b, CFSTR("W"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
+    else if ((v = CFDictionaryGetValue(b, CFSTR("Width"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
     if ((v = CFDictionaryGetValue(b, CFSTR("H"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
+    else if ((v = CFDictionaryGetValue(b, CFSTR("Height"))) != NULL) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
     if (w <= 0 || h <= 0) continue;
     char *title = NULL;
     CFTypeRef tv = CFDictionaryGetValue(d, kCGWindowName);
