@@ -79,6 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let i = menu.addItem(withTitle: label, action: sel, keyEquivalent: "")
             i.target = self
         }
+        let draw = menu.addItem(withTitle: "DEV draw rect…",
+                                action: #selector(devDraw), keyEquivalent: "")
+        draw.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit ScreenReader",
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -132,5 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.messageText = title
         a.informativeText = info
         a.runModal()
+    }
+
+    @objc private func devDraw() {
+        let o = RectOverlay()
+        o.onResult = { x, y, w, h in NSLog("rect = %d, %d, %d, %d", x, y, w, h) }
+        o.present()
     }
 }
