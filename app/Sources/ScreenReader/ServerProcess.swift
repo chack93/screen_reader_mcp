@@ -171,6 +171,10 @@ final class ServerProcess {
 
     private func set(_ s: State) {
         DispatchQueue.main.async {
+            // The 2 s health poll calls set(.running) every tick; firing the
+            // callback unconditionally made the status menu rebuild — and
+            // flicker — twice a second even though nothing changed.
+            guard self.state != s else { return }
             self.state = s
             self.onStateChange?(s)
         }
