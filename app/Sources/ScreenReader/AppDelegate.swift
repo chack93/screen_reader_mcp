@@ -75,7 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }())
         let t = ConfigStore.target(from: json)
-        if t.mode == "rect", t.w > 0 {
+        if t.mode == "screen" {
+            line("Target: screen \(t.screen + 1)")
+        } else if t.mode == "rect", t.w > 0 {
             line("Target: rectangle (\(t.x), \(t.y), \(t.w), \(t.h))")
         } else if !t.app.isEmpty {
             line("Target: \(t.app)" + (t.title.isEmpty ? "" : " — \(t.title)"))

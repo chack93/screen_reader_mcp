@@ -77,6 +77,41 @@ func TestSaveLoad_roundTrip(t *testing.T) {
 	}
 }
 
+func TestLoad_screenMode(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(p, []byte(`{"mode":"screen","screen":1}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if c.Mode != "screen" || c.Screen != 1 {
+		t.Fatalf("screen target not loaded: %+v", c)
+	}
+}
+
+func TestSaveLoad_screenRoundTrip(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	c := Defaults()
+	c.Mode = "screen"
+	c.Screen = 2
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Mode != "screen" || got.Screen != 2 {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	// absent "screen" key defaults to 0 (main display)
+	if Defaults().Screen != 0 {
+		t.Fatalf("default screen should be 0: %+v", Defaults())
+	}
+}
+
 func TestDefaults_http(t *testing.T) {
 	c := Defaults()
 	if c.HTTP.Addr != "127.0.0.1:18427" || c.HTTP.Token != "" {

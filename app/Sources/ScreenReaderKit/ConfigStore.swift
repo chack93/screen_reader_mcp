@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 /// Reads/writes ~/.config/screenreader/config.json.
-/// Mutates only app/title/mode/rect/http; preserves every other key.
+/// Mutates only app/title/mode/screen/rect/http; preserves every other key.
 public enum ConfigStore {
     public static let defaultPath: String =
         NSHomeDirectory() + "/.config/screenreader/config.json"
@@ -11,14 +11,17 @@ public enum ConfigStore {
     public struct Target: Equatable {
         public var app: String
         public var title: String
-        public var mode: String // "app" | "rect"
+        public var mode: String // "app" | "rect" | "screen"
         public var x: Int
         public var y: Int
         public var w: Int
         public var h: Int
-        public init(app: String, title: String, mode: String, x: Int, y: Int, w: Int, h: Int) {
+        public var screen: Int // display index for mode "screen" (0 = main)
+        public init(app: String, title: String, mode: String, x: Int, y: Int, w: Int, h: Int,
+                    screen: Int = 0) {
             self.app = app; self.title = title; self.mode = mode
             self.x = x; self.y = y; self.w = w; self.h = h
+            self.screen = screen
         }
     }
 
@@ -59,6 +62,7 @@ public enum ConfigStore {
         out["app"] = t.app
         out["title"] = t.title
         out["mode"] = t.mode
+        out["screen"] = t.screen
         out["rect"] = ["x": t.x, "y": t.y, "w": t.w, "h": t.h]
         return out
     }
@@ -69,7 +73,8 @@ public enum ConfigStore {
         return Target(app: json["app"] as? String ?? "",
                       title: json["title"] as? String ?? "",
                       mode: json["mode"] as? String ?? "app",
-                      x: i("x"), y: i("y"), w: i("w"), h: i("h"))
+                      x: i("x"), y: i("y"), w: i("w"), h: i("h"),
+                      screen: json["screen"] as? Int ?? 0)
     }
 
     public static func httpConfig(from json: [String: Any]) -> (addr: String, token: String) {

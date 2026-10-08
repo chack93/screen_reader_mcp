@@ -36,7 +36,8 @@ type Config struct {
 	Version int        `json:"version"`
 	App     string     `json:"app"`
 	Title   string     `json:"title"`
-	Mode    string     `json:"mode"` // "app" | "rect"
+	Mode    string     `json:"mode"`   // "app" | "rect" | "screen"
+	Screen  int        `json:"screen"` // display index for mode "screen" (0 = main)
 	Rect    Rect       `json:"rect"`
 	OCR     OCRCfg     `json:"ocr"`
 	Capture CaptureCfg `json:"capture"`

@@ -23,7 +23,7 @@ import (
 	"screenreader/internal/window"
 )
 
-// resolveRect picks the target region: explicit rect > per-call app/title > configured mode (rect/app).
+// resolveRect picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app).
 func resolveRect(cfg *config.Config, app, title string, rect *geom.Rect) (geom.Rect, error) {
 	if rect != nil {
 		return *rect, nil
@@ -47,10 +47,13 @@ func resolveRect(cfg *config.Config, app, title string, rect *geom.Rect) (geom.R
 	if cfg.Mode == "rect" && cfg.Rect.W > 0 && cfg.Rect.H > 0 {
 		return geom.Rect(cfg.Rect), nil
 	}
+	if cfg.Mode == "screen" {
+		return displayBounds(cfg.Screen)
+	}
 	if cfg.App != "" {
 		return window.Resolve(cfg.App, cfg.Title)
 	}
-	return geom.Rect{}, fmt.Errorf("no target configured (set app or a pinned rect)")
+	return geom.Rect{}, fmt.Errorf("no target configured (set app, a pinned rect, or a screen)")
 }
 
 func errResult(err error) *mcp.CallToolResult {
@@ -87,7 +90,7 @@ func RegisterReading(server *mcp.Server) {
 		MaxWidth int        `json:"max_width,omitempty" jsonschema:"Downscale capture to this width in px"`
 	}
 
-	mcp.AddTool(server, &mcp.Tool{Name: "capture", Description: "Capture the target window (or region) as a PNG image, with region bounds and image size."},
+	mcp.AddTool(server, &mcp.Tool{Name: "capture", Description: "Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a regionArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
 			r, err := resolveRect(cfg, a.App, a.Title, a.Rect)
@@ -116,7 +119,7 @@ func RegisterReading(server *mcp.Server) {
 		Level        string     `json:"level,omitempty" jsonschema:"fast|accurate"`
 		IncludeBoxes bool       `json:"include_boxes"`
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "ocr", Description: "OCR the target window (or region) with Apple Vision; returns text and screen-absolute boxes."},
+	mcp.AddTool(server, &mcp.Tool{Name: "ocr", Description: "OCR the target (window, pinned region, or whole screen) with Apple Vision; returns text and screen-absolute boxes."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a ocrArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
 			r, err := resolveRect(cfg, a.App, a.Title, a.Rect)
@@ -254,8 +257,7 @@ func RegisterInput(server *mcp.Server) {
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
 			}
-			sw, sh := screenSize()
-			if e := boundsErr(x, y, sw, sh); e != nil {
+			if e := inBoundsErr(x, y); e != nil {
 				return errResult(e), nil, nil
 			}
 			button := orDefault(a.Button, "left")
@@ -284,8 +286,7 @@ func RegisterInput(server *mcp.Server) {
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
 			}
-			sw, sh := screenSize()
-			if e := boundsErr(x, y, sw, sh); e != nil {
+			if e := inBoundsErr(x, y); e != nil {
 				return errResult(e), nil, nil
 			}
 			input.Move(x, y)
@@ -310,8 +311,7 @@ func RegisterInput(server *mcp.Server) {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
 			}
 			if x != 0 || y != 0 {
-				sw, sh := screenSize()
-				if e := boundsErr(x, y, sw, sh); e != nil {
+				if e := inBoundsErr(x, y); e != nil {
 					return errResult(e), nil, nil
 				}
 				input.Move(x, y)
@@ -340,11 +340,10 @@ func RegisterInput(server *mcp.Server) {
 				x1, y1 = mapImageXY(a.X1, a.Y1, a.ImgW, a.ImgH, *a.Rect)
 				x2, y2 = mapImageXY(a.X2, a.Y2, a.ImgW, a.ImgH, *a.Rect)
 			}
-			sw, sh := screenSize()
-			if e := boundsErr(x1, y1, sw, sh); e != nil {
+			if e := inBoundsErr(x1, y1); e != nil {
 				return errResult(e), nil, nil
 			}
-			if e := boundsErr(x2, y2, sw, sh); e != nil {
+			if e := inBoundsErr(x2, y2); e != nil {
 				return errResult(e), nil, nil
 			}
 			button := orDefault(a.Button, "left")
@@ -398,11 +397,12 @@ func RegisterTarget(server *mcp.Server) {
 		App        string     `json:"app,omitempty"`
 		Title      string     `json:"title,omitempty"`
 		Rect       *geom.Rect `json:"rect,omitempty"`
-		Mode       string     `json:"mode,omitempty" jsonschema:"app|rect"`
+		Mode       string     `json:"mode,omitempty" jsonschema:"app|rect|screen"`
+		Screen     *int       `json:"screen,omitempty" jsonschema:"Display index for mode=screen (0 = main; see list_screens)"`
 		ClearApp   bool       `json:"clear_app,omitempty" jsonschema:"Clear the stored app target"`
 		ClearTitle bool       `json:"clear_title,omitempty" jsonschema:"Clear the stored title filter"`
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "set_target", Description: "Set + persist the default target (app/title or pinned rect)."},
+	mcp.AddTool(server, &mcp.Tool{Name: "set_target", Description: "Set + persist the default target (app/title, pinned rect, or a whole screen)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a setTargetArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
 			if a.App != "" {
@@ -414,8 +414,19 @@ func RegisterTarget(server *mcp.Server) {
 			if a.Rect != nil {
 				cfg.Rect = config.Rect{X: a.Rect.X, Y: a.Rect.Y, W: a.Rect.W, H: a.Rect.H}
 			}
+			if a.Screen != nil {
+				if _, err := displayBounds(*a.Screen); err != nil {
+					return errResult(err), nil, nil
+				}
+				cfg.Screen = *a.Screen
+			}
 			if a.Mode != "" {
-				cfg.Mode = a.Mode
+				switch a.Mode {
+				case "app", "rect", "screen":
+					cfg.Mode = a.Mode
+				default:
+					return errResult(fmt.Errorf("invalid mode %q (want app|rect|screen)", a.Mode)), nil, nil
+				}
 			} else if a.Rect != nil {
 				cfg.Mode = "rect"
 			}
@@ -429,7 +440,7 @@ func RegisterTarget(server *mcp.Server) {
 				return errResult(err), nil, nil
 			}
 			r, err := resolveRect(cfg, "", "", nil)
-			msg := fmt.Sprintf("target saved (mode=%s app=%q title=%q rect=%+v)", cfg.Mode, cfg.App, cfg.Title, cfg.Rect)
+			msg := fmt.Sprintf("target saved (mode=%s screen=%d app=%q title=%q rect=%+v)", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, cfg.Rect)
 			if err == nil {
 				msg += fmt.Sprintf(" resolved=%+v", r)
 			}
@@ -462,7 +473,7 @@ func RegisterTarget(server *mcp.Server) {
 				return errResult(err), nil, nil
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
-				Text: fmt.Sprintf("mode=%s app=%q title=%q bounds=%+v", cfg.Mode, cfg.App, cfg.Title, r),
+				Text: fmt.Sprintf("mode=%s screen=%d app=%q title=%q bounds=%+v", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, r),
 			}}}, nil, nil
 		})
 
@@ -486,6 +497,30 @@ func RegisterTarget(server *mcp.Server) {
 			}
 			if out == "" {
 				out = "(no visible windows)"
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "list_screens", Description: "List active displays (index, main flag, screen-absolute bounds) to choose a screen target."},
+		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
+			n := robotgo.DisplaysNum()
+			var out string
+			for i := 0; i < n; i++ {
+				r, err := displayBounds(i)
+				if err != nil {
+					return errResult(err), nil, nil
+				}
+				// Index 0 is the main display (the underlying screenshot
+				// package's contract — robotgo.GetMainId() returns a raw
+				// CGDirectDisplayID, not this 0-based index, so don't use it).
+				tag := ""
+				if i == 0 {
+					tag = " (main)"
+				}
+				out += fmt.Sprintf("%d%s | %+v\n", i, tag, r)
+			}
+			if out == "" {
+				out = "(no active displays)"
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
 		})
@@ -525,13 +560,24 @@ func RegisterTarget(server *mcp.Server) {
 			}
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "doctor", Description: "Self-check: target resolution and screen size."},
+	mcp.AddTool(server, &mcp.Tool{Name: "doctor", Description: "Self-check: displays, target resolution and permissions."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
-			sx, sy := screenSize()
 			var out string
-			out += fmt.Sprintf("screen: %dx%d\n", sx, sy)
-			out += fmt.Sprintf("config: mode=%s app=%q title=%q rect=%+v\n", cfg.Mode, cfg.App, cfg.Title, cfg.Rect)
+			out += fmt.Sprintf("displays: %d\n", robotgo.DisplaysNum())
+			for i := 0; i < robotgo.DisplaysNum(); i++ {
+				r, err := displayBounds(i)
+				if err != nil {
+					out += fmt.Sprintf("  %d: ERROR %v\n", i, err)
+					continue
+				}
+				tag := ""
+				if i == 0 { // index 0 = main display (see list_screens)
+					tag = " (main)"
+				}
+				out += fmt.Sprintf("  %d%s: %+v\n", i, tag, r)
+			}
+			out += fmt.Sprintf("config: mode=%s screen=%d app=%q title=%q rect=%+v\n", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, cfg.Rect)
 			out += "permissions:\n"
 			out += permLine("screen_recording", perms.ScreenRecording(), "System Settings → Privacy & Security → Screen Recording (restart the app after granting)")
 			out += permLine("accessibility", perms.Accessibility(), "System Settings → Privacy & Security → Accessibility")
@@ -621,8 +667,43 @@ func ocrFind(cfg *config.Config, app, title string, rect *geom.Rect, text, match
 	return false, geom.Rect{}, ""
 }
 
-func screenSize() (int, int) {
-	return robotgo.GetScreenSize()
+// displayBounds returns the screen-absolute bounds of display i (0 = main).
+func displayBounds(i int) (geom.Rect, error) {
+	if i < 0 || i >= robotgo.DisplaysNum() {
+		return geom.Rect{}, fmt.Errorf("no display %d (%d active — see list_screens)", i, robotgo.DisplaysNum())
+	}
+	x, y, w, h := robotgo.GetDisplayBounds(i)
+	return geom.Rect{X: x, Y: y, W: w, H: h}, nil
+}
+
+// virtualScreen returns the bounding union of all active displays. Secondary
+// displays often sit at negative or oversized offsets relative to the main
+// one, so input coords are validated against this union, not the main size.
+func virtualScreen() (geom.Rect, error) {
+	n := robotgo.DisplaysNum()
+	if n == 0 {
+		return geom.Rect{}, fmt.Errorf("no active displays")
+	}
+	x, y, w, h := robotgo.GetDisplayBounds(0)
+	r := geom.Rect{X: x, Y: y, W: w, H: h}
+	for i := 1; i < n; i++ {
+		x, y, w, h = robotgo.GetDisplayBounds(i)
+		if x < r.X {
+			r.W += r.X - x
+			r.X = x
+		}
+		if y < r.Y {
+			r.H += r.Y - y
+			r.Y = y
+		}
+		if x+w > r.X+r.W {
+			r.W = x + w - r.X
+		}
+		if y+h > r.Y+r.H {
+			r.H = y + h - r.Y
+		}
+	}
+	return r, nil
 }
 
 // mapImageXY maps an image-space point to screen-absolute coords, using r as the
@@ -638,12 +719,15 @@ func mapImageXY(imgX, imgY, imgW, imgH int, r geom.Rect) (int, int) {
 	return geom.MapImageToScreen(imgX, imgY, imgW, imgH, r)
 }
 
-// boundsErr reports whether (x,y) is outside the main display. Safety net for
-// real-cursor actions. Multi-display setups may have valid coords outside the
-// main display; treat such rejections as "re-pin the rect or use screen coords".
-func boundsErr(x, y, sw, sh int) error {
-	if x < 0 || y < 0 || x >= sw || y >= sh {
-		return fmt.Errorf("coordinates (%d,%d) out of bounds (screen %dx%d)", x, y, sw, sh)
+// inBoundsErr is the input safety net: (x,y) must lie inside the union of all
+// active displays (virtual screen), so secondary-display clicks are accepted.
+func inBoundsErr(x, y int) error {
+	vs, err := virtualScreen()
+	if err != nil {
+		return err
+	}
+	if x < vs.X || y < vs.Y || x >= vs.X+vs.W || y >= vs.Y+vs.H {
+		return fmt.Errorf("coordinates (%d,%d) out of bounds (virtual screen %+v)", x, y, vs)
 	}
 	return nil
 }

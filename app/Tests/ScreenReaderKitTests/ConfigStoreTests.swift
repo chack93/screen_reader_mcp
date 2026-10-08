@@ -42,6 +42,20 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(ConfigStore.target(from: ConfigStore.applyTarget(t, to: [:])), t)
     }
 
+    func testTargetRoundTrip_screenMode() {
+        let t = ConfigStore.Target(app: "", title: "", mode: "screen", x: 0, y: 0, w: 0, h: 0,
+                                   screen: 1)
+        let back = ConfigStore.target(from: ConfigStore.applyTarget(t, to: [:]))
+        XCTAssertEqual(back, t)
+        XCTAssertEqual(back.screen, 1)
+    }
+
+    func testTarget_missingScreenKeyDefaultsToZero() {
+        let back = ConfigStore.target(from: ["mode": "screen"])
+        XCTAssertEqual(back.screen, 0)
+        XCTAssertEqual(back.mode, "screen")
+    }
+
     func testHTTPConfigDefaults() {
         XCTAssertEqual(ConfigStore.httpConfig(from: [:]).addr, "127.0.0.1:18427")
         XCTAssertEqual(ConfigStore.httpConfig(from: [:]).token, "")

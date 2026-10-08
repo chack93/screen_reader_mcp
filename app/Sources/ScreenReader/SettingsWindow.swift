@@ -8,12 +8,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var segmented: NSSegmentedControl!
     private var pickerRow: NSStackView!
     private var rectRow: NSStackView!
+    private var screenRow: NSStackView!
     private var picker: NSPopUpButton!
+    private var screenPicker: NSPopUpButton!
     private var rectLabel: NSTextField!
     private var serverLabel: NSTextField!
     private var snippetView: NSTextView!
     private var stderrView: NSTextView!
     private var lastModeKey = ""
+    private var lastScreensFingerprint = ""
     private var timer: Timer?
 
     init(server: ServerProcess) {
@@ -70,7 +73,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // --- Target ---
         let target = stack(.vertical)
         target.addArrangedSubview(sectionTitle("Target"))
-        segmented = NSSegmentedControl(labels: ["App window", "Rectangle"],
+        segmented = NSSegmentedControl(labels: ["App window", "Rectangle", "Screen"],
                                        trackingMode: .selectOne, target: self,
                                        action: #selector(modeChanged))
         target.addArrangedSubview(segmented)
@@ -91,8 +94,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         rectLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         rectRow.addArrangedSubview(rectLabel)
 
+        screenRow = stack(.horizontal)
+        screenPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+        screenPicker.target = self
+        screenPicker.action = #selector(screenPickerChanged)
+        screenPicker.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        screenRow.addArrangedSubview(screenPicker)
+        screenRow.addArrangedSubview(NSButton(title: "Refresh", target: self,
+                                              action: #selector(refreshScreenPicker)))
+
         target.addArrangedSubview(pickerRow)
         target.addArrangedSubview(rectRow)
+        target.addArrangedSubview(screenRow)
         root.addArrangedSubview(target)
 
         // --- Server ---
@@ -172,17 +185,59 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // user mid-selection in Rectangle mode isn't snapped back every 2 s.
         // Derive the key from the stored mode directly (modeChanged persists
         // the mode immediately, so an unsaved/zero rect never fights the UI).
-        let key = t.mode == "rect" ? "rect" : "app"
+        let key = t.mode == "rect" ? "rect" : (t.mode == "screen" ? "screen" : "app")
         if key != lastModeKey {
             lastModeKey = key
-            segmented.selectedSegment = key == "rect" ? 1 : 0
+            segmented.selectedSegment = key == "rect" ? 1 : (key == "screen" ? 2 : 0)
             updateModeRows()
         }
+        syncScreenPicker()
     }
 
     private func updateModeRows() {
         pickerRow.isHidden = segmented.selectedSegment != 0
         rectRow.isHidden = segmented.selectedSegment != 1
+        screenRow.isHidden = segmented.selectedSegment != 2
+    }
+
+    /// Keeps the screen dropdown in sync: rebuilds the items when the display
+    /// set changes (fingerprint of sizes), then selects the stored screen.
+    /// NSScreen.screens[0] is the main display — the same ordering robotgo
+    /// uses (index 0 = main) — so the item index maps straight into config
+    /// "screen".
+    private func syncScreenPicker() {
+        let screens = NSScreen.screens
+        let fp = screens.map { "\(Int($0.frame.width))x\(Int($0.frame.height))" }
+            .joined(separator: ",")
+        if fp != lastScreensFingerprint {
+            lastScreensFingerprint = fp
+            screenPicker.removeAllItems()
+            for (i, s) in screens.enumerated() {
+                let title = "Screen \(i + 1) (\(Int(s.frame.width))×\(Int(s.frame.height)))"
+                    + (i == 0 ? " (main)" : "")
+                screenPicker.addItem(withTitle: title)
+                screenPicker.lastItem?.representedObject = i
+            }
+        }
+        let t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
+        let idx = (t.mode == "screen" && t.screen >= 0 && t.screen < screens.count) ? t.screen : 0
+        if screenPicker.indexOfSelectedItem != idx {
+            screenPicker.selectItem(at: idx)
+        }
+    }
+
+    @objc private func refreshScreenPicker() {
+        lastScreensFingerprint = ""
+        syncScreenPicker()
+    }
+
+    @objc private func screenPickerChanged() {
+        let idx = screenPicker.indexOfSelectedItem
+        guard idx >= 0 else { return }
+        var t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
+        t.mode = "screen"
+        t.screen = idx
+        saveTarget(t)
     }
 
     // MARK: - Actions
@@ -193,7 +248,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func modeChanged() {
-        let key = segmented.selectedSegment == 1 ? "rect" : "app"
+        let key: String
+        switch segmented.selectedSegment {
+        case 1: key = "rect"
+        case 2: key = "screen"
+        default: key = "app"
+        }
         guard key != lastModeKey else { return }
         lastModeKey = key
         updateModeRows()

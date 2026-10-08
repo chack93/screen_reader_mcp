@@ -8,7 +8,7 @@ It treats the Remote Desktop **window** as a controllable "virtual screen": it c
 
 ## Status
 
-The server is complete: all 17 tools are registered and verified over stdio (ListTools smoke passed). Live on-screen verification of capture/OCR/synthetic input requires the three macOS permissions below — grant them before expecting non-black captures or working input.
+The server is complete: all 18 tools are registered and verified over stdio (ListTools smoke passed). Live on-screen verification of capture/OCR/synthetic input requires the three macOS permissions below — grant them before expecting non-black captures or working input.
 
 ## ScreenReader app (recommended)
 
@@ -22,8 +22,8 @@ open app/build/ScreenReader.app
 
 1. First run: click **Grant access** and approve the three prompts (Screen
    Recording, Accessibility, Automation). Confirm with menu → **Test capture…**.
-2. Open the window → pick the target: select a window from the list, or draw a
-   rectangle over the screen.
+2. Open the window → pick the target: select a window from the list, draw a
+   rectangle over the screen, or pick a whole display (Screen).
 3. **Copy opencode config** → merge the snippet into your `opencode.json` under
    `mcp.servers`. Any agent then reaches the MCP endpoint at
    `http://127.0.0.1:18427/mcp` while the app is open.
@@ -39,8 +39,8 @@ Notes:
   Create a New Certificate → name **ScreenReader Dev**, kind Code Signing,
   self-signed, login keychain. Without it, builds are ad-hoc-signed and macOS
   asks for permissions again after every rebuild.
-- The app writes only `app`/`title`/`mode`/`rect`/`http` keys to the shared
-  config; `ocr`/`capture`/`input` edits keep working.
+- The app writes only `app`/`title`/`mode`/`screen`/`rect`/`http` keys to the
+  shared config; `ocr`/`capture`/`input` edits keep working.
 - Build/test: `cd app && swift build && swift test` (Kit logic is unit-tested;
   the GUI + TCC behavior is verified via the menu → Test capture canary).
 
@@ -82,6 +82,7 @@ Pick one (or mix — per-call args always override config):
   "app": "Microsoft Remote Desktop",
   "title": "",
   "mode": "app",
+  "screen": 0,
   "rect": { "x": 0, "y": 0, "w": 0, "h": 0 },
   "ocr": { "languages": ["en"], "level": "accurate" },
   "capture": { "max_width": 1600 },
@@ -89,8 +90,8 @@ Pick one (or mix — per-call args always override config):
 }
 ```
 
-2. **Call the `set_target` tool** — sets and persists the default target (app/title, or a pinned rect with `mode: "rect"`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
-3. Use `list_windows` to discover the exact app name / title regex / bounds to pin.
+2. **Call the `set_target` tool** — sets and persists the default target (app/title, a pinned rect with `mode: "rect"`, or a whole display with `mode: "screen"` + `screen: <index>`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
+3. Use `list_windows` to discover the exact app name / title regex / bounds to pin, or `list_screens` to see the display indexes (0 = main) for a screen target.
 
 ## opencode config
 
@@ -137,8 +138,8 @@ The recommended way to run HTTP mode is the ScreenReader menu-bar app (see below
 
 | Tool | Purpose | Key args |
 | --- | --- | --- |
-| `capture` | Capture the target window (or region) as a PNG image, with region bounds and image size. | `app`, `title`, `rect`, `max_width` |
-| `ocr` | OCR the target window (or region) with Apple Vision; returns text and screen-absolute boxes. | `app`, `title`, `rect`, `languages`, `level`, `include_boxes` |
+| `capture` | Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. | `app`, `title`, `rect`, `max_width` |
+| `ocr` | OCR the target (window, pinned region, or whole screen) with Apple Vision; returns text and screen-absolute boxes. | `app`, `title`, `rect`, `languages`, `level`, `include_boxes` |
 | `click_text` | OCR-locate text in the target and click its center (screen-absolute). | `text`, `match`, `occurrence`, `dry_run` |
 | `click` | Click at screen-absolute (x,y). | `x`, `y`, `button`, `clicks`, `dry_run`, `coords`, `rect`, `img_w`, `img_h` |
 | `move` | Move the cursor to (x,y). | `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
@@ -148,19 +149,20 @@ The recommended way to run HTTP mode is the ScreenReader menu-bar app (see below
 | `paste` | Paste text (clipboard + Cmd+V); reliable for long text/commands. | `text` |
 | `key` | Press a key/shortcut combo, e.g. `"cmd+v"`, `"return"`. | `combo` |
 | `wait` | Sleep for ms milliseconds. | `ms` |
-| `set_target` | Set + persist the default target (app/title or pinned rect). | `app`, `title`, `rect`, `mode`, `clear_app`, `clear_title` |
+| `set_target` | Set + persist the default target (app/title, pinned rect, or whole screen). | `app`, `title`, `rect`, `mode` (app\|rect\|screen), `screen`, `clear_app`, `clear_title` |
 | `focus_window` | Activate the target app and raise its window; return bounds. | `app`, `title` |
-| `window_info` | Report the resolved target (app, title, mode, bounds). | — |
+| `window_info` | Report the resolved target (mode, screen, app, title, bounds). | — |
 | `list_windows` | List visible windows (app, title, bounds) to choose a target. | — |
+| `list_screens` | List active displays (index, main flag, screen-absolute bounds) to choose a screen target. | — |
 | `wait_for_text` | Poll OCR until the text appears or timeout. | `text`, `timeout_ms`, `interval_ms`, `match`, `app`, `title`, `rect` |
-| `doctor` | Self-check: target resolution and screen size. | — |
+| `doctor` | Self-check: displays, target resolution and permissions. | — |
 
 ## Coordinate model
 
 - **Screen-absolute by default**: top-left origin, Y down. All input coordinates (click, move, drag) and OCR boxes are in these coordinates.
 - `capture` returns `bounds={x,y,w,h}` (screen region) **and** `image=WxH` (pixel size, may be downscaled or Retina-doubled). Map image→screen proportionally: `screenX = bounds.x + (px / img_w) * bounds.w` (same for Y).
 - `ocr` boxes are **screen-absolute** — usable directly with `click`/`drag` (with `include_boxes` to print them).
-- Optional escape hatch: `coords: "image"` + `rect` on `click`/`move`/`drag`/`scroll` maps a point in captured-image space to screen space using the same proportional formula; pass `img_w`/`img_h` from `capture`'s `image=WxH` for correct Retina/downscale mapping (fall back to 1:1 when omitted). Coordinates are validated against the main display bounds and rejected if out of range.
+- Optional escape hatch: `coords: "image"` + `rect` on `click`/`move`/`drag`/`scroll` maps a point in captured-image space to screen space using the same proportional formula; pass `img_w`/`img_h` from `capture`'s `image=WxH` for correct Retina/downscale mapping (fall back to 1:1 when omitted). Coordinates are validated against the union of all active displays (the virtual screen) and rejected if out of range — so secondary-display coordinates (often negative or beyond the main display's size) are accepted.
 
 ## Safety
 
