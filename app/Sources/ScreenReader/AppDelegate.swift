@@ -12,6 +12,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// made the open menu flicker (and left a ghost-duplicated section on the
     /// first open after launch).
     private var serverLine: NSMenuItem!
+    private var serverActionItem: NSMenuItem!
+    private var autoStopItem: NSMenuItem!
+    /// Deadline of the pending 4h auto-stop (nil = timer off).
+    private var autoStopAt: Date?
+    /// Prebuilt menu bar icons: plain (server down) and dot-badged (server up).
+    private var menuIconIdle: NSImage?
+    private var menuIconActive: NSImage?
+    /// Whether the badge variant is currently shown — only swap the image
+    /// on an actual up/down flip.
+    private var menuIconShownBadged: Bool?
+    /// 30 s tick, alive only while the server is up: keeps the timer title
+    /// fresh and performs the 4h auto-stop at its deadline.
+    private var menuTick: Timer?
     private var targetLine: NSMenuItem!
     private var permLines: [NSMenuItem] = []
 
@@ -24,9 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureToken()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // The dot badge indicates a RUNNING server. The dot diameter scales
+        // with the symbol's pixel size so it stays proportional at @2x.
         if let img = NSImage(systemSymbolName: "menubar.rectangle",
-                             accessibilityDescription: "ScreenReader") {
-            statusItem.button?.image = img
+                             accessibilityDescription: "Screen Reader MCP"),
+           let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            menuIconIdle = NSImage(cgImage: cg, size: img.size)
+            menuIconIdle?.isTemplate = true
+            let dot = CGFloat(cg.width) * 0.22
+            menuIconActive = NSImage(cgImage: MenuBadge.withDot(cg, dotDiameter: dot, inset: dot * 0.25), size: img.size)
+            menuIconActive?.isTemplate = true
+            statusItem.button?.image = menuIconIdle
         } else {
             statusItem.button?.title = "SR"
         }
@@ -36,18 +57,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildMenu(menu)
         updateMenu()
         refreshPermissions()
-        server.onStateChange = { [weak self] _ in self?.updateMenu() }
+        server.onStateChange = { [weak self] s in
+            if s.isUp {
+                self?.startMenuTick()
+            } else {
+                self?.stopMenuTick()
+                // The 4h auto-stop exists to stop a RUNNING server; once the
+                // server goes down (stopped or crashed) there is nothing left
+                // to stop, so the pending deadline is dropped with it.
+                self?.cancelAutoStop()
+            }
+            self?.updateMenu()
+        }
         server.start()
+        // Opt-out, not opt-in: the 4h stop is pending from the moment the app
+        // (and its server) start; the menu item cancels it.
+        scheduleAutoStop()
     }
 
-    func applicationWillTerminate(_ notification: Notification) { server.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        stopMenuTick()
+        server.stop()
+    }
+
+    /// The 4h auto-stop toggle: "Timer: start" when idle (click schedules),
+    /// "Timer: clear (server stop in H:MM)" when pending (click cancels).
+    @objc private func toggleAutoStop() {
+        if autoStopAt == nil { scheduleAutoStop() } else { cancelAutoStop() }
+    }
+
+    /// Schedule the 4h deadline (no-op when already pending). Called at app
+    /// start and on every explicit server start, so crash-backoff respawns
+    /// keep the ORIGINAL deadline instead of extending it.
+    private func scheduleAutoStop() {
+        guard autoStopAt == nil else { return }
+        autoStopAt = Date().addingTimeInterval(4 * 3600)
+        updateMenu()
+    }
+
+    /// Cancel a pending 4h deadline (no-op when none) — the opt-out.
+    private func cancelAutoStop() {
+        guard autoStopAt != nil else { return }
+        autoStopAt = nil
+        updateMenu()
+    }
+
+    private func startMenuTick() {
+        guard menuTick == nil else { return }
+        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.tickMenu() }
+        RunLoop.main.add(t, forMode: .common)
+        menuTick = t
+    }
+
+    private func stopMenuTick() {
+        menuTick?.invalidate()
+        menuTick = nil
+    }
+
+    /// 30 s tick: performs the 4h auto-stop at its deadline and refreshes
+    /// the menu titles (the timer value is otherwise only re-rendered
+    /// when the menu opens or a state change lands).
+    private func tickMenu() {
+        if let at = autoStopAt, Date() >= at {
+            autoStopAt = nil
+            server.stop()
+        }
+        updateMenu()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func menuWillOpen(_ menu: NSMenu) {
         updateMenu()
         refreshPermissions()
     }
 
-    @objc private func restartServer() { server.restart() }
+    @objc private func toggleServer() {
+        // An explicit start opens a fresh 4h auto-stop window (opt-out).
+        if !server.state.isUp { scheduleAutoStop() }
+        server.toggle()
+    }
 
     @objc private func openSettings() {
         // T16 fix: replace a controller whose window was closed, so the old
@@ -93,14 +181,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return i
         }
         menu.addItem(.separator())
-        for (label, sel) in [("Open ScreenReader…", #selector(openSettings)),
-                              ("Restart server", #selector(restartServer)),
-                              ("Test capture…", #selector(testCapture))] {
-            let i = menu.addItem(withTitle: label, action: sel, keyEquivalent: "")
-            i.target = self
-        }
+        let open = menu.addItem(withTitle: "Open Screen Reader MCP…",
+                                action: #selector(openSettings), keyEquivalent: "")
+        open.target = self
+        // Start/Stop is state-dependent: one fixed item, retitled in place by
+        // updateMenu() — same flicker-free pattern as the status lines above.
+        serverActionItem = menu.addItem(withTitle: "Server: start",
+                                        action: #selector(toggleServer), keyEquivalent: "")
+        serverActionItem.target = self
+        autoStopItem = menu.addItem(withTitle: "Timer: start",
+                                    action: #selector(toggleAutoStop), keyEquivalent: "")
+        autoStopItem.target = self
+        let test = menu.addItem(withTitle: "Test capture…",
+                                action: #selector(testCapture), keyEquivalent: "")
+        test.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit ScreenReader",
+        menu.addItem(withTitle: "Quit Screen Reader MCP",
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -110,6 +206,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard serverLine != nil else { return }
         let json = ((try? ConfigStore.load()) ?? [:])
         let (addr, _) = ConfigStore.httpConfig(from: json)
+        serverActionItem.title = server.state.isUp ? "Server: stop" : "Server: start"
+        // The dot badge mirrors the server state (template ink, so it takes
+        // the menu bar's tint like the symbol itself). Swap only on a flip.
+        let up = server.state.isUp
+        if menuIconShownBadged != up {
+            menuIconShownBadged = up
+            statusItem.button?.image = up ? menuIconActive : menuIconIdle
+        }
+        // The 4h timer only makes sense while the server is running — the
+        // item disappears from the menu entirely when the server is down.
+        // isHidden on the fixed item keeps the flicker-free no-teardown rule.
+        autoStopItem.isHidden = !server.state.isUp
+        if let at = autoStopAt {
+            // "server stop in …" is the 4h timer's CURRENT value (time left).
+            autoStopItem.title = "Timer: clear (server stop in \(TimerClock.format(at.timeIntervalSinceNow)))"
+        } else {
+            autoStopItem.title = "Timer: start"
+        }
         serverLine.title = "Server: " + {
             switch server.state {
             case .running: return "running on \(addr)"
@@ -178,7 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if CaptureCheck.isAllBlack(png) {
                 alert("Test capture: ALL BLACK",
                       "Screen Recording is not effective for the app. Check System Settings → " +
-                      "Privacy & Security → Screen Recording shows ScreenReader ITSELF (not your " +
+                      "Privacy & Security → Screen Recording shows Screen Reader MCP ITSELF (not your " +
                       "terminal), then quit and reopen the app. If it is still black, STOP — the " +
                       "child-process attribution assumption (§7) failed and must be escalated.")
             } else {

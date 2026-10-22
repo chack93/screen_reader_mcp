@@ -1,6 +1,44 @@
 package window
 
-import "testing"
+import (
+	"testing"
+
+	"screenreader/internal/geom"
+)
+
+func TestSortAlphabeticalByAppThenTitle(t *testing.T) {
+	wins := []Win{
+		{App: "Terminal", Title: "zsh"},
+		{App: "finder", Title: "B"}, // lowercase app: must group with Finder
+		{App: "Finder", Title: "a"},
+		{App: "Safari", Title: ""},
+	}
+	Sort(wins)
+	want := []Win{
+		{App: "Finder", Title: "a"},
+		{App: "finder", Title: "B"},
+		{App: "Safari", Title: ""},
+		{App: "Terminal", Title: "zsh"},
+	}
+	if len(wins) != len(want) {
+		t.Fatalf("got %d windows, want %d", len(wins), len(want))
+	}
+	for i := range want {
+		if wins[i].App != want[i].App || wins[i].Title != want[i].Title {
+			t.Fatalf("position %d: got %q/%q, want %q/%q", i, wins[i].App, wins[i].Title, want[i].App, want[i].Title)
+		}
+	}
+}
+
+func TestSortStableForEqualKeys(t *testing.T) {
+	first := Win{App: "App", Title: "Same", Rect: geom.Rect{X: 1}}
+	second := Win{App: "app", Title: "same", Rect: geom.Rect{X: 2}}
+	wins := []Win{first, second}
+	Sort(wins)
+	if wins[0].Rect.X != 1 || wins[1].Rect.X != 2 {
+		t.Fatalf("stable order not preserved: got X=%d then X=%d, want 1 then 2", wins[0].Rect.X, wins[1].Rect.X)
+	}
+}
 
 func TestSplitWindowLineValid(t *testing.T) {
 	first, title, x, y, w, h, ok := splitWindowLine("1\tMy Window\t10\t20\t300\t200")

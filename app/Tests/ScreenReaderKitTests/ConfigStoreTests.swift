@@ -20,7 +20,7 @@ final class ConfigStoreTests: XCTestCase {
     func testApplyTarget_preservesOtherKeys() {
         let json: [String: Any] = [
             "version": 1,
-            "ocr": ["languages": ["en"], "level": "accurate"],
+            "capture": ["max_width": 1600],
             "input": ["delay_ms": 120],
             "app": "OldApp",
         ]
@@ -31,8 +31,8 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(out["title"] as? String, "Files")
         XCTAssertEqual(out["mode"] as? String, "app")
         XCTAssertEqual(out["version"] as? Int, 1)
-        let ocr = out["ocr"] as? [String: Any]
-        XCTAssertEqual(ocr?["level"] as? String, "accurate")
+        let capture = out["capture"] as? [String: Any]
+        XCTAssertEqual(capture?["max_width"] as? Int, 1600)
         let input = out["input"] as? [String: Any]
         XCTAssertEqual(input?["delay_ms"] as? Int, 120)
     }
@@ -54,6 +54,24 @@ final class ConfigStoreTests: XCTestCase {
         let back = ConfigStore.target(from: ["mode": "screen"])
         XCTAssertEqual(back.screen, 0)
         XCTAssertEqual(back.mode, "screen")
+    }
+
+    func testAccessDefaultsToFull() {
+        XCTAssertEqual(ConfigStore.access(from: [:]), "full")
+        XCTAssertEqual(ConfigStore.access(from: ["access": "read_only"]), "read_only")
+    }
+
+    func testApplyAccess_preservesOtherKeys() {
+        let json: [String: Any] = [
+            "app": "A",
+            "capture": ["max_width": 1600],
+        ]
+        let out = ConfigStore.applyAccess("read_only", to: json)
+        XCTAssertEqual(out["access"] as? String, "read_only")
+        XCTAssertEqual(out["app"] as? String, "A")
+        XCTAssertEqual((out["capture"] as? [String: Any])?["max_width"] as? Int, 1600)
+        // round-trip
+        XCTAssertEqual(ConfigStore.access(from: ConfigStore.applyAccess("full", to: [:])), "full")
     }
 
     func testHTTPConfigDefaults() {

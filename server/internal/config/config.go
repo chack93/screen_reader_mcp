@@ -14,13 +14,11 @@ type Rect struct {
 	H int `json:"h"`
 }
 
-type OCRCfg struct {
-	Languages []string `json:"languages"`
-	Level     string   `json:"level"` // "fast" | "accurate"
-}
-
+// CaptureCfg bounds capture output. MaxWidth 0 (the default) means native
+// resolution: the model reads on-screen text from the image itself, so the
+// image's pixels are its reading budget. Set a width only to cap payload size.
 type CaptureCfg struct {
-	MaxWidth int `json:"max_width"`
+	MaxWidth int `json:"max_width"` // 0 or negative = native resolution
 }
 
 type InputCfg struct {
@@ -34,12 +32,12 @@ type HTTPCfg struct {
 
 type Config struct {
 	Version int        `json:"version"`
+	Access  string     `json:"access"` // "full" | "read_only" — which MCP tools the agent gets
 	App     string     `json:"app"`
 	Title   string     `json:"title"`
 	Mode    string     `json:"mode"`   // "app" | "rect" | "screen"
 	Screen  int        `json:"screen"` // display index for mode "screen" (0 = main)
 	Rect    Rect       `json:"rect"`
-	OCR     OCRCfg     `json:"ocr"`
 	Capture CaptureCfg `json:"capture"`
 	Input   InputCfg   `json:"input"`
 	HTTP    HTTPCfg    `json:"http"`
@@ -55,12 +53,13 @@ func DefaultPath() string {
 func Defaults() *Config {
 	return &Config{
 		Version: 1,
+		Access:  "full",
 		Mode:    "app",
 		Rect:    Rect{},
-		OCR:     OCRCfg{Languages: []string{"en"}, Level: "accurate"},
-		Capture: CaptureCfg{MaxWidth: 1600},
-		Input:   InputCfg{DelayMs: 120},
-		HTTP:    HTTPCfg{Addr: "127.0.0.1:18427"},
+		// Capture.MaxWidth stays 0: native-resolution captures, because the
+		// image is the model's only reading channel.
+		Input: InputCfg{DelayMs: 120},
+		HTTP:  HTTPCfg{Addr: "127.0.0.1:18427"},
 	}
 }
 

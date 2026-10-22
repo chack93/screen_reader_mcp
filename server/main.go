@@ -15,12 +15,15 @@ import (
 
 const version = "0.1.0"
 
-// buildServer constructs the MCP server with all tools registered (stdio and HTTP share it).
+// buildServer constructs the MCP server with the tools allowed by the
+// config's access mode (stdio and HTTP share it). The mode is re-read here on
+// every build, so HTTP mode picks up settings changes live.
 func buildServer() *mcp.Server {
+	cfg, _ := config.Load(config.DefaultPath())
 	server := mcp.NewServer(&mcp.Implementation{Name: "screenreader", Version: version}, nil)
-	tools.RegisterReading(server)
-	tools.RegisterInput(server)
-	tools.RegisterTarget(server)
+	tools.RegisterReading(server, cfg.Access)
+	tools.RegisterInput(server, cfg.Access)
+	tools.RegisterTarget(server, cfg.Access)
 	return server
 }
 

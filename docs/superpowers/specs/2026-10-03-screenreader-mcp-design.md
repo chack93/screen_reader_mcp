@@ -1,5 +1,7 @@
 # ScreenReader MCP — Design Spec
 
+> **Superseded 2026-10-20 — OCR removed.** The `ocr`, `click_text`, and `wait_for_text` tools, the `internal/ocr` package, the `ocr` config section, and the Apple Vision (`tmc/apple`) dependency no longer exist. The tool surface is 15 tools and the model reads the captured PNG with its own vision (`capture.max_width` defaults to 0 = native resolution). OCR passages below are kept as a historical record. See `README.md` for current behavior.
+
 - **Date:** 2026-10-03
 - **Status:** Approved for implementation planning
 - **Repo:** `screen_reader`

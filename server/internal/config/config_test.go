@@ -3,7 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -25,10 +25,11 @@ func TestDefaultPath_usesHome(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	c := Defaults()
-	if c.Version != 1 || c.Mode != "app" || c.OCR.Level != "accurate" ||
-		c.Capture.MaxWidth != 1600 || c.Input.DelayMs != 120 ||
-		!reflect.DeepEqual(c.OCR.Languages, []string{"en"}) {
+	if c.Version != 1 || c.Mode != "app" || c.Input.DelayMs != 120 {
 		t.Fatalf("unexpected defaults: %+v", c)
+	}
+	if c.Capture.MaxWidth != 0 {
+		t.Fatalf("capture.max_width default = %d, want 0 (native resolution)", c.Capture.MaxWidth)
 	}
 }
 
@@ -38,7 +39,7 @@ func TestLoad_missingFile_returnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if c.Mode != "app" || c.Capture.MaxWidth != 1600 {
+	if c.Mode != "app" || c.Input.DelayMs != 120 {
 		t.Fatalf("not defaults: %+v", c)
 	}
 }
@@ -54,8 +55,35 @@ func TestLoad_partialFile_fillsDefaults(t *testing.T) {
 	if c.Mode != "rect" || c.Rect != (Rect{1, 2, 3, 4}) {
 		t.Fatalf("rect not loaded: %+v", c)
 	}
-	if c.OCR.Level != "accurate" || c.Capture.MaxWidth != 1600 {
+	if c.Input.DelayMs != 120 || c.Capture.MaxWidth != 0 {
 		t.Fatalf("defaults not filled: %+v", c)
+	}
+}
+
+// TestLoad_legacyOCRKeyIgnored: OCR was removed from the tool surface (the
+// model reads the screen with its own vision), but configs written before that
+// still carry an "ocr" section. Loading must keep working and saving must drop
+// the stale key.
+func TestLoad_legacyOCRKeyIgnored(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(p, []byte(`{"mode":"app","ocr":{"languages":["en"],"level":"accurate"}}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("legacy ocr key broke Load: %v", err)
+	}
+	if c.Mode != "app" {
+		t.Fatalf("mode = %q, want app", c.Mode)
+	}
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(b), `"ocr"`) {
+		t.Fatalf("saved config still has an ocr key: %s", b)
 	}
 }
 
@@ -119,6 +147,42 @@ func TestDefaults_http(t *testing.T) {
 	}
 }
 
+func TestDefaults_access(t *testing.T) {
+	if c := Defaults(); c.Access != "full" {
+		t.Fatalf("default access = %q, want full", c.Access)
+	}
+}
+
+func TestLoad_access(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(p, []byte(`{"access":"read_only"}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if c.Access != "read_only" {
+		t.Fatalf("access = %q, want read_only", c.Access)
+	}
+}
+
+func TestSaveLoad_accessRoundTrip(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	c := Defaults()
+	c.Access = "read_only"
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Access != "read_only" {
+		t.Fatalf("round-trip access = %q, want read_only", got.Access)
+	}
+}
+
 func TestLoad_httpOverride(t *testing.T) {
 	tempDir(t)
 	p := filepath.Join(t.TempDir(), "config.json")
@@ -130,7 +194,7 @@ func TestLoad_httpOverride(t *testing.T) {
 	if c.HTTP.Addr != "127.0.0.1:19999" || c.HTTP.Token != "abc" {
 		t.Fatalf("http not loaded: %+v", c.HTTP)
 	}
-	if c.Mode != "app" || c.Capture.MaxWidth != 1600 {
+	if c.Mode != "app" || c.Input.DelayMs != 120 {
 		t.Fatalf("defaults not filled: %+v", c)
 	}
 }

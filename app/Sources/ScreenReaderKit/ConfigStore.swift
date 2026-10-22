@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 /// Reads/writes ~/.config/screenreader/config.json.
-/// Mutates only app/title/mode/screen/rect/http; preserves every other key.
+/// Mutates only app/title/mode/screen/rect/http/access; preserves every other key.
 public enum ConfigStore {
     public static let defaultPath: String =
         NSHomeDirectory() + "/.config/screenreader/config.json"
@@ -75,6 +75,18 @@ public enum ConfigStore {
                       mode: json["mode"] as? String ?? "app",
                       x: i("x"), y: i("y"), w: i("w"), h: i("h"),
                       screen: json["screen"] as? Int ?? 0)
+    }
+
+    /// Agent access mode: "full" (default) | "read_only".
+    public static func access(from json: [String: Any]) -> String {
+        json["access"] as? String ?? "full"
+    }
+
+    /// Sets access only; preserves every other key.
+    public static func applyAccess(_ access: String, to json: [String: Any]) -> [String: Any] {
+        var out = json
+        out["access"] = access
+        return out
     }
 
     public static func httpConfig(from json: [String: Any]) -> (addr: String, token: String) {

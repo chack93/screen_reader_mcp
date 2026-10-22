@@ -15,7 +15,18 @@ private var sigChildPid: Int32 = 0
 /// SIGTERM on quit, auto-restart with backoff after crashes, /health polling
 /// for state. All mutable process bookkeeping lives on one serial queue.
 final class ServerProcess {
-    enum State: Equatable { case stopped, starting, running, restarting, crashed }
+    enum State: Equatable {
+        case stopped, starting, running, restarting, crashed
+
+        /// Up, or coming up — the UI offers "Stop"; stopped/crashed offers
+        /// "Start". (A pending crash-backoff respawn counts as "coming up".)
+        var isUp: Bool {
+            switch self {
+            case .running, .starting, .restarting: return true
+            case .stopped, .crashed: return false
+            }
+        }
+    }
 
     var onStateChange: ((State) -> Void)?
     private(set) var state: State = .stopped
@@ -70,7 +81,13 @@ final class ServerProcess {
         } catch {}
     }
 
-    func restart() { start() }
+    /// Start when down (stopped/crashed), stop when up (running/starting/
+    /// restarting) — the menu and settings show whichever applies in place of
+    /// a single "restart". Reading `state` here is main-thread (button/menu
+    /// action), matching the threading contract.
+    func toggle() {
+        if state.isUp { stop() } else { start() }
+    }
 
     func stop() {
         DispatchQueue.main.async { self.healthTimer?.invalidate(); self.healthTimer = nil }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Go server and the Swift app, assembles ScreenReader.app with the
+# Builds the Go server and the Swift app, assembles Screen Reader MCP.app with the
 # Go binary embedded, and codesigns both. Requires Go + Xcode toolchain.
 # Optional (recommended, one-time): a self-signed codesigning identity named
 # "ScreenReader Dev" — without it signing is ad-hoc and TCC grants reset on
@@ -14,11 +14,12 @@ cd "$(dirname "$0")"
 (cd app && swift build -c release)
 
 # 3. Assemble the .app bundle
-APP="app/build/ScreenReader.app"
+APP="app/build/Screen Reader MCP.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp app/.build/release/ScreenReader "$APP/Contents/MacOS/ScreenReader"
+cp app/.build/release/ScreenReader "$APP/Contents/MacOS/Screen Reader MCP"
 cp app/Info.plist "$APP/Contents/Info.plist"
+cp app/Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp server/screenreader "$APP/Contents/Resources/screenreader"
 
 # 4. Codesign (stable identity when available, else ad-hoc with a warning)

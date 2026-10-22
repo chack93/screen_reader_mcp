@@ -13,22 +13,29 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var screenPicker: NSPopUpButton!
     private var rectLabel: NSTextField!
     private var serverLabel: NSTextField!
+    private var serverButton: NSButton!
     private var snippetView: NSTextView!
     private var stderrView: NSTextView!
+    private var accessSegmented: NSSegmentedControl!
+    private var accessCaption: NSTextField!
+    private var lastAccessKey = ""
     private var lastModeKey = ""
     private var lastScreensFingerprint = ""
     private var timer: Timer?
 
     init(server: ServerProcess) {
         self.server = server
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 620),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 715),
                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        win.title = "ScreenReader"
+        win.title = "Screen Reader MCP"
         win.center()
         super.init(window: win)
         win.delegate = self   // T16 fix: stop the refresh timer when the window closes
         build()
         refresh()
+        // Populate the App window picker on open if it's still empty, so the
+        // user isn't forced to hit Refresh before seeing any windows.
+        if picker.itemArray.isEmpty { refreshPicker() }
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
@@ -72,6 +79,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         // --- Target ---
         let target = stack(.vertical)
+        target.alignment = .centerX
+        // The section must keep a CONSTANT width in every mode: an NSStackView
+        // otherwise sizes to its widest VISIBLE child, so switching to
+        // Rectangle (narrow row only) collapsed the section and the leading
+        // root pinned it left, breaking the centering. 420 matches the other
+        // sections' fixed row widths.
+        target.widthAnchor.constraint(equalToConstant: 420).isActive = true
         target.addArrangedSubview(sectionTitle("Target"))
         segmented = NSSegmentedControl(labels: ["App window", "Rectangle", "Screen"],
                                        trackingMode: .selectOne, target: self,
@@ -108,6 +122,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         target.addArrangedSubview(screenRow)
         root.addArrangedSubview(target)
 
+        // --- Agent access ---
+        let accessSection = stack(.vertical)
+        accessSection.addArrangedSubview(sectionTitle("Agent access"))
+        accessSegmented = NSSegmentedControl(labels: ["Full access", "Read-only"],
+                                             trackingMode: .selectOne, target: self,
+                                             action: #selector(accessChanged))
+        accessSection.addArrangedSubview(accessSegmented)
+        accessCaption = NSTextField(wrappingLabelWithString: "")
+        accessCaption.font = NSFont.systemFont(ofSize: 11)
+        accessCaption.textColor = .secondaryLabelColor
+        accessCaption.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        accessSection.addArrangedSubview(accessCaption)
+        root.addArrangedSubview(accessSection)
+
         // --- Server ---
         let srv = stack(.vertical)
         srv.addArrangedSubview(sectionTitle("Server"))
@@ -115,8 +143,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         serverLabel = NSTextField(labelWithString: "…")
         srvRow.addArrangedSubview(serverLabel)
         srvRow.addArrangedSubview(NSView())
-        srvRow.addArrangedSubview(NSButton(title: "Restart", target: self,
-                                           action: #selector(restartServer)))
+        // State-dependent: retitled Start/Stop by refresh(), which runs at
+        // build time and every 2 s.
+        serverButton = NSButton(title: "Start server", target: self,
+                                action: #selector(toggleServer))
+        srvRow.addArrangedSubview(serverButton)
         srvRow.addArrangedSubview(NSButton(title: "Copy opencode config", target: self,
                                            action: #selector(copySnippet)))
         srvRow.widthAnchor.constraint(equalToConstant: 420).isActive = true
@@ -173,6 +204,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .crashed:               serverLabel.stringValue = "crashed"
         case .stopped:               serverLabel.stringValue = "stopped"
         }
+        serverButton.title = server.state.isUp ? "Stop server" : "Start server"
         stderrView.isHidden = server.state != .crashed
         if server.state == .crashed { stderrView.string = server.stderrText }
         snippetView.string = Snippet.opencodeEntry(addr: addr, token: token)
@@ -191,6 +223,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             segmented.selectedSegment = key == "rect" ? 1 : (key == "screen" ? 2 : 0)
             updateModeRows()
         }
+
+        // Same pattern: sync the access segment only when the stored value
+        // actually changed, so an external config edit takes over the UI.
+        let acc = ConfigStore.access(from: json)
+        let accKey = acc == "read_only" ? "ro" : "full"
+        if accKey != lastAccessKey {
+            lastAccessKey = accKey
+            accessSegmented.selectedSegment = accKey == "ro" ? 1 : 0
+            accessCaption.stringValue = accessCaptionText(acc)
+        }
+
         syncScreenPicker()
     }
 
@@ -224,6 +267,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if screenPicker.indexOfSelectedItem != idx {
             screenPicker.selectItem(at: idx)
         }
+    }
+
+    @objc private func accessChanged() {
+        let key = accessSegmented.selectedSegment == 1 ? "read_only" : "full"
+        guard key != lastAccessKey else { return }
+        lastAccessKey = key
+        accessCaption.stringValue = accessCaptionText(key)
+        do {
+            let json = try ConfigStore.load()
+            try ConfigStore.save(ConfigStore.applyAccess(key, to: json))
+        } catch {
+            let a = NSAlert()
+            a.messageText = "Config write failed"
+            a.informativeText = "\(error)\nThe app will not overwrite config.json — fix it by hand."
+            a.runModal()
+        }
+        refresh()
+    }
+
+    private func accessCaptionText(_ access: String) -> String {
+        if access == "read_only" {
+            return "Read-only: capture, window_info, list_windows, list_screens, doctor, wait — no input, no target switching."
+        }
+        return "Full access: all 15 tools, including input and target switching."
     }
 
     @objc private func refreshScreenPicker() {
@@ -263,6 +330,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // protected via lastModeKey). Keeps every later reload consistent.
         var t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
         t.mode = key
+        // Defect fix: switching TO App-window mode must adopt the window the
+        // picker is currently showing. The stored app can be empty/stale —
+        // the rect flow saves app:"" — while the picker still displays the
+        // user's previously selected entry, so the mode alone never retargeted
+        // it. Placeholder items ("Loading…", "server error: …", "(no windows
+        // …)") carry no representedObject, so the stored app is kept there.
+        if key == "app",
+           let w = picker.selectedItem?.representedObject as? WindowEntry {
+            t.app = w.app
+            t.title = w.title
+        }
         saveTarget(t)
     }
 
@@ -304,12 +382,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func selectCurrentTargetInPicker() {
         let t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
         guard !t.app.isEmpty else { return }
+        // Prefer an exact app+title match — the list can hold several windows
+        // of the same app — and fall back to app-only.
+        var fallback: NSMenuItem?
         for item in picker.itemArray {
-            if let w = item.representedObject as? WindowEntry, w.app == t.app {
+            guard let w = item.representedObject as? WindowEntry else { continue }
+            if w.app == t.app && w.title == t.title {
                 picker.select(item)
                 return
             }
+            if fallback == nil && w.app == t.app { fallback = item }
         }
+        if let f = fallback { picker.select(f) }
     }
 
     @objc private func pickerChanged() {
@@ -348,7 +432,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         refresh()
     }
 
-    @objc private func restartServer() { server.restart() }
+    @objc private func toggleServer() { server.toggle() }
 
     @objc private func copySnippet() {
         let json = (try? ConfigStore.load()) ?? [:]

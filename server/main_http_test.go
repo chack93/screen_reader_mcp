@@ -71,7 +71,7 @@ func TestHTTPFullStack(t *testing.T) {
 	_, msg = mcpPost(t, ts, session, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	result, _ = msg["result"].(map[string]any)
 	got, _ := result["tools"].([]any)
-	if len(got) != 18 {
+	if len(got) != 15 {
 		var names []string
 		for _, tx := range got {
 			m, _ := tx.(map[string]any)

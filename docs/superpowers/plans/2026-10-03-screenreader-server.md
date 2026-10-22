@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded 2026-10-20 — OCR removed.** Do not implement the OCR parts of this plan: the `ocr`, `click_text`, and `wait_for_text` tools, `internal/ocr`, `geom.Center`/`geom.VisionBBoxToScreen`, the `ocr` config section, and the Apple Vision (`tmc/apple`) dependency have all been removed. The server ships 15 tools; the model reads the captured PNG with its own vision. `README.md` is authoritative.
+
 **Goal:** Build `screenreader`, a single-binary Go stdio MCP server that captures/OCRs a Remote Desktop window on the Mac and drives it with synthetic mouse/keyboard input, so an opencode agent can read files and do research on a remote machine.
 
 **Architecture:** Two layers. *Observation* resolves the target window's screen-absolute bounds, captures that region, and returns a PNG (for the vision model) and/or Apple Vision OCR text. *Action* maps model-chosen coordinates to screen space and synthesizes mouse/keyboard events. Pure logic (coordinate math, config, key parsing) is isolated into cgo-free packages that are unit-testable without a display; platform work (window, capture, OCR, input) is thin wrappers around `osascript`, `robotgo`, and `tmc/apple`.

@@ -21,11 +21,6 @@ func MapImageToScreen(imgX, imgY, imgW, imgH int, r Rect) (sx, sy int) {
 	return sx, sy
 }
 
-// Center returns the integer center of a rect.
-func Center(r Rect) (cx, cy int) {
-	return r.X + r.W/2, r.Y + r.H/2
-}
-
 // ScaleDown returns (w,h) fitting maxWidth while preserving aspect ratio.
 // maxWidth<=0 or imgW<=maxWidth returns the original size.
 func ScaleDown(imgW, imgH, maxWidth int) (w, h int) {
@@ -38,20 +33,4 @@ func ScaleDown(imgW, imgH, maxWidth int) (w, h int) {
 		h = 1
 	}
 	return w, h
-}
-
-// VisionBBoxToScreen converts a Vision bounding box (normalized [0,1], bottom-left
-// origin) to a screen-absolute Rect, given the image pixel size and the captured region.
-func VisionBBoxToScreen(bx, by, bw, bh float64, imgW, imgH int, r Rect) Rect {
-	// Vision (bottom-left) -> image pixels (top-left).
-	ix := bx * float64(imgW)
-	iy := (1 - by - bh) * float64(imgH)
-	iw := bw * float64(imgW)
-	ih := bh * float64(imgH)
-	// Image pixels -> screen-absolute (proportional, DPI-safe).
-	sx := r.X + int(ix*float64(r.W)/float64(imgW))
-	sy := r.Y + int(iy*float64(r.H)/float64(imgH))
-	sw := int(iw * float64(r.W) / float64(imgW))
-	sh := int(ih * float64(r.H) / float64(imgH))
-	return Rect{X: sx, Y: sy, W: sw, H: sh}
 }

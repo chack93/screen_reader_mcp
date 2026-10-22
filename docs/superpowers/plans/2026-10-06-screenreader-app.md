@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded 2026-10-20 — OCR removed.** Any step below that touches the `ocr`/`click_text`/`wait_for_text` tools or the read-only tool list is stale: those tools are gone, full access is 15 tools, and read-only is `capture`, `window_info`, `list_windows`, `list_screens`, `doctor`, `wait`. The app's own behavior (TCC ownership, HTTP hosting, target picking) is unaffected.
+
 **Goal:** A macOS menu-bar app (Swift/AppKit) that owns the TCC permissions, hosts the existing Go MCP server in a new loopback Streamable-HTTP mode, and gives any local agent a stable MCP endpoint — with in-app window-picking and rectangle drawing for target selection.
 
 **Architecture:** The Go server gains a `--http` flag serving MCP over Streamable HTTP on `127.0.0.1:18427/mcp` (SDK `mcp.NewStreamableHTTPHandler`, bearer token via `auth.RequireBearerToken`, plus an unauthenticated `/health`) alongside its unchanged stdio mode. A new Swift app (`app/`) spawns the Go binary — embedded in its bundle — with `--http`, supervises it (restart/backoff), owns the three TCC permissions, and writes the shared `config.json` that the Go server re-reads per action. The app is a host, never a proxy: agents talk HTTP directly to the Go server.

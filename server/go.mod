@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	github.com/go-vgo/robotgo v1.1.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/tmc/apple v0.6.18
 	golang.org/x/image v0.46.0
 )
 

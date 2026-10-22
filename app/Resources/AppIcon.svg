@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Screen Reader MCP — app icon.
+    Eye in a full-bleed rounded square (Big Sur style) on a blue->indigo
+    gradient. The iris is cut out with the SAME gradient (userSpaceOnUse) so
+    it reads as a true hole in the white eye; a white pupil sits inside.
+    Render to .icns via rsvg-convert + sips + iconutil (see build/notes).
+  -->
+  <defs>
+    <linearGradient id="bg" x1="120" y1="56" x2="904" y2="968" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#5B9BFF"/>
+      <stop offset="0.52" stop-color="#3F6BE8"/>
+      <stop offset="1"    stop-color="#2E2496"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.14" r="0.8">
+      <stop offset="0"   stop-color="#FFFFFF" stop-opacity="0.24"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- background tile -->
+  <rect width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+  <!-- soft top glow for depth -->
+  <rect width="1024" height="1024" rx="228" ry="228" fill="url(#glow)"/>
+
+  <!-- eye -->
+  <g>
+    <!-- white almond (the eye) -->
+    <path d="M176 512 C 300 330, 724 330, 848 512 C 724 694, 300 694, 176 512 Z" fill="#FFFFFF"/>
+    <!-- iris: same gradient => true cutout -->
+    <circle cx="512" cy="512" r="120" fill="url(#bg)"/>
+    <!-- white pupil -->
+    <circle cx="512" cy="512" r="64" fill="#FFFFFF"/>
+  </g>
+</svg>

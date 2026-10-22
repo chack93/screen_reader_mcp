@@ -2,6 +2,7 @@ package window
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -117,4 +118,17 @@ func MergeWindows(raws []CGWin, procs []ProcInfo) []Win {
 		out = append(out, Win{App: p.Name, Title: r.Title, Rect: r.Rect})
 	}
 	return out
+}
+
+// Sort orders wins alphabetically by app, then by title (case-insensitive,
+// stable) so an app's windows group together in a predictable order — for
+// both the list_windows output and the app's picker, which consumes it.
+func Sort(wins []Win) {
+	sort.SliceStable(wins, func(i, j int) bool {
+		ai, bi := strings.ToLower(wins[i].App), strings.ToLower(wins[j].App)
+		if ai != bi {
+			return ai < bi
+		}
+		return strings.ToLower(wins[i].Title) < strings.ToLower(wins[j].Title)
+	})
 }

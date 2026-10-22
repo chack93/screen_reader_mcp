@@ -28,29 +28,7 @@ func TestScaleDown(t *testing.T) {
 	if w, h := ScaleDown(800, 600, 0); w != 800 || h != 600 {
 		t.Fatalf("zero-max got (%d,%d) want (800,600)", w, h)
 	}
-}
-
-func TestCenter(t *testing.T) {
-	if cx, cy := Center(Rect{X: 10, Y: 20, W: 100, H: 200}); cx != 60 || cy != 120 {
-		t.Fatalf("got (%d,%d) want (60,120)", cx, cy)
-	}
-}
-
-func TestVisionBBoxToScreen_identity(t *testing.T) {
-	// Identity: image 1000x1000 == region 1000x1000 at origin.
-	// Vision bbox normalized, bottom-left origin.
-	box := VisionBBoxToScreen(0.25, 0.5, 0.5, 0.25, 1000, 1000, Rect{X: 0, Y: 0, W: 1000, H: 1000})
-	want := Rect{X: 250, Y: 250, W: 500, H: 250}
-	if box != want {
-		t.Fatalf("got %v want %v", box, want)
-	}
-}
-
-func TestVisionBBoxToScreen_offsetAndScale(t *testing.T) {
-	// Region 100,50,400,300 ; image 800x600 (2x). Full-image bbox (0,0,1,1) -> whole region.
-	box := VisionBBoxToScreen(0, 0, 1, 1, 800, 600, Rect{X: 100, Y: 50, W: 400, H: 300})
-	want := Rect{X: 100, Y: 50, W: 400, H: 300}
-	if box != want {
-		t.Fatalf("got %v want %v", box, want)
+	if w, h := ScaleDown(800, 600, -1); w != 800 || h != 600 {
+		t.Fatalf("negative-max got (%d,%d) want (800,600)", w, h)
 	}
 }

@@ -1,5 +1,7 @@
 # ScreenReader App — Design Spec
 
+> **Superseded 2026-10-20 — OCR removed.** The `ocr`, `click_text`, and `wait_for_text` tools no longer exist (Apple Vision / `tmc/apple` dropped with them), so the tool counts and the read-only tool list quoted below are stale: full access is 15 tools, read-only is `capture`, `window_info`, `list_windows`, `list_screens`, `doctor`, `wait`. The app itself is unchanged — it never used the OCR tools.
+
 - **Date:** 2026-10-06
 - **Status:** Pending user review
 - **Repo:** `screen_reader`
@@ -114,7 +116,12 @@ http://127.0.0.1:18427/mcp
   - Permission rows: `Screen Recording ✓/✗`, `Accessibility ✓/✗`, `Automation ✓/✗`
 - Actions:
   - **Open ScreenReader…** — opens the settings window.
-  - **Restart server** — kills and respawns the child.
+  - **Start server / Stop server** — state-dependent, one item that shows the
+    action matching the current state plus a short status in parentheses, e.g.
+    `Stop server (running)` / `Start server (crashed)`: "Start server" when
+    stopped/crashed, "Stop server" when running (or starting/restarting — a
+    pending backoff respawn is cancelled too). The Settings window's Server
+    section shows the same button next to its status label.
   - **Test capture…** — calls `capture` via the built-in MCP client on the current target;
     **fails if the image is all-black (every pixel ≤ 8)**; result + likely fix shown in an alert.
     This is also the TCC-attribution canary (§7) and the end-to-end connectivity check.
@@ -264,8 +271,8 @@ README gains an "HTTP mode / app" section (§12).
 - **Go → Swift:** `/health` polling (status), child exit code, stderr tail (crash display).
 - **Config:** app writes, Go re-reads per action ⇒ live updates without restart.
 - **Crash handling:** unexpected child exit → respawn with backoff 1 s, 2 s, 4 s, … capped at 30 s.
-  Three rapid crashes → stop retrying; the Server section shows a stderr excerpt and a **Restart
-  server** action.
+  Three rapid crashes → stop retrying; the Server section shows a stderr excerpt, and the
+  state-dependent **Start server / Stop server** button offers a start.
 
 ## 9. Error handling
 
