@@ -67,6 +67,6 @@ xcrun notarytool submit "$DMG" "${NOTARY_ARGS[@]}" --wait
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 spctl --assess --type install --verbose "$APP" || echo "warning: spctl rejected the app (often over-strict on the build machine; stapler validate above is the real gate)"
-shasum -a 256 "$DMG" > "$DMG.sha256"
+( cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256" )
 
 echo "built: $DMG"
