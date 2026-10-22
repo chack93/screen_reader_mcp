@@ -4,3 +4,10 @@ server/screenreader
 app/.build/
 app/build/
 dist/
+# never commit signing/notary material (workflow steps write these to the
+# workspace root if run locally)
+*.p12
+*.p8
+*.key
+*.pem
+p12pw.txt
