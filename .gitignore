@@ -3,3 +3,4 @@ server/screenreader
 .DS_Store
 app/.build/
 app/build/
+dist/

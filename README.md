@@ -60,6 +60,19 @@ cd server && CGO_ENABLED=1 go build -o screenreader .
 
 This produces `server/screenreader` (already in `.gitignore`).
 
+## Release builds (signed + notarized)
+
+`./release.sh` builds the app in `dist/` (never touching the dev bundle in `app/build/`), signs every executable with the **Developer ID Application** identity (hardened runtime + secure timestamp), notarizes the zip and the final `.dmg`, staples both tickets, and emits `dist/screen-reader-mcp-<version>.dmg` + `.sha256`.
+
+Locally it needs the Developer ID identity in the login keychain plus notarytool credentials — either a stored profile (`--keychain-profile screenreader`, the default) or explicit env vars:
+
+```bash
+NOTARY_KEY_PATH=…/AuthKey_XXXXXXXXXX.p8 NOTARY_KEY_ID=XXXXXXXXXX \
+NOTARY_ISSUER_ID=xxxxxxxx-xxxx-… ./release.sh
+```
+
+**GitHub Actions:** pushing a *release* (any tag) triggers `.github/workflows/release.yml`, which runs `release.sh` on a macOS runner and attaches the `.dmg` to the release. Required repo secrets: `DEVELOPER_ID_P12`, `DEVELOPER_ID_P12_PASSWORD`, `NOTARY_API_KEY_P8`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`. The cert/key material itself lives outside the repo (in `~/Library/Application Support/ScreenReaderRelease/` on the dev box).
+
 ## Permissions
 
 macOS TCC requires grants for the app that owns the server process (the terminal running opencode, or opencode.app). In **System Settings → Privacy & Security**, grant all three:

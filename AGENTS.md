@@ -6,6 +6,7 @@ Single-binary Go **stdio MCP server** (module `screenreader`, code in `server/`)
 
 ```bash
 CGO_ENABLED=1 go build -o screenreader .   # output is gitignored
+VERSION=v1.2.3 ./release.sh               # signed+notarized dmg in dist/ (Developer ID + notarytool creds; see README "Release builds")
 CGO_ENABLED=1 go vet ./...
 CGO_ENABLED=1 go test ./...                # full suite (tools/input need cgo to compile)
 go test ./internal/geom/ ./internal/config/ ./internal/keycombo/ ./internal/window/  # fast loop, cgo-free
