@@ -74,6 +74,26 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(ConfigStore.access(from: ConfigStore.applyAccess("full", to: [:])), "full")
     }
 
+    func testHotkeyDefaultsToF9() {
+        XCTAssertEqual(ConfigStore.hotkey(from: [:]), "f9")
+        XCTAssertEqual(ConfigStore.hotkey(from: ["hotkey": "ctrl+f9"]), "ctrl+f9")
+        XCTAssertEqual(ConfigStore.hotkey(from: ["hotkey": "off"]), "off")
+        XCTAssertEqual(ConfigStore.hotkey(from: ["hotkey": 7]), "f9") // wrong type → default
+    }
+
+    func testApplyHotkey_preservesOtherKeys() {
+        let json: [String: Any] = [
+            "app": "A",
+            "access": "read_only",
+            "capture": ["max_width": 0],
+        ]
+        let out = ConfigStore.applyHotkey("off", to: json)
+        XCTAssertEqual(out["hotkey"] as? String, "off")
+        XCTAssertEqual(out["app"] as? String, "A")
+        XCTAssertEqual(out["access"] as? String, "read_only")
+        XCTAssertEqual((out["capture"] as? [String: Any])?["max_width"] as? Int, 0)
+    }
+
     func testHTTPConfigDefaults() {
         XCTAssertEqual(ConfigStore.httpConfig(from: [:]).addr, "127.0.0.1:18427")
         XCTAssertEqual(ConfigStore.httpConfig(from: [:]).token, "")

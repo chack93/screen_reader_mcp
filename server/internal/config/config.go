@@ -31,8 +31,12 @@ type HTTPCfg struct {
 }
 
 type Config struct {
-	Version int        `json:"version"`
-	Access  string     `json:"access"` // "full" | "read_only" — which MCP tools the agent gets
+	Version int    `json:"version"`
+	Access  string `json:"access"` // "full" | "read_only" — which MCP tools the agent gets
+	// Hotkey is the menu-bar app's global "stop the server" key spec (e.g. "f9",
+	// "ctrl+opt+f9", "off"). The server never reads it; the field exists so
+	// Save (set_target rewrites the whole file) does not drop the app's setting.
+	Hotkey  string     `json:"hotkey"`
 	App     string     `json:"app"`
 	Title   string     `json:"title"`
 	Mode    string     `json:"mode"`   // "app" | "rect" | "screen"
@@ -54,6 +58,7 @@ func Defaults() *Config {
 	return &Config{
 		Version: 1,
 		Access:  "full",
+		Hotkey:  "f9", // mirrors the app's default; empty would mean "disabled" there
 		Mode:    "app",
 		Rect:    Rect{},
 		// Capture.MaxWidth stays 0: native-resolution captures, because the

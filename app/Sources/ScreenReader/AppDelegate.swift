@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     let server = ServerProcess()
     private var settingsWC: SettingsWindowController?
+    /// The global "stop the server" key (config `hotkey`), registered via Carbon.
+    private var hotkeys: HotkeyCenter!
 
     /// The menu has a fixed structure, built once. These references let
     /// updateMenu() refresh the dynamic lines in place instead of
@@ -36,6 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureToken()
+        // The kill key is live from the first moment the app is up; stop() is
+        // deduped, so firing it while the server is down does nothing.
+        hotkeys = HotkeyCenter { [weak self] in self?.server.stop() }
+        applyHotkeySpec(ConfigStore.hotkey(from: (try? ConfigStore.load()) ?? [:]))
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // The dot badge indicates a RUNNING server. The dot diameter scales
         // with the symbol's pixel size so it stays proportional at @2x.
@@ -137,11 +143,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.toggle()
     }
 
+    /// Registers the configured stop hotkey ("off" / unparseable = nothing is
+    /// registered) and refreshes the menu, which shows the key on the stop item.
+    private func applyHotkeySpec(_ spec: String) {
+        hotkeys?.update(Hotkey.parse(spec))
+        updateMenu()
+    }
+
     @objc private func openSettings() {
         // T16 fix: replace a controller whose window was closed, so the old
         // one (and its now-invalidated timer) deallocates; reuse a visible one.
         if settingsWC == nil || settingsWC?.window == nil || !(settingsWC?.window?.isVisible ?? false) {
-            settingsWC = SettingsWindowController(server: server)
+            settingsWC = SettingsWindowController(
+                server: server,
+                hotkeyChanged: { [weak self] spec in self?.applyHotkeySpec(spec) },
+                hotkeySuspended: { [weak self] s in self?.hotkeys.setSuspended(s) })
         }
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)
@@ -206,10 +222,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard serverLine != nil else { return }
         let json = ((try? ConfigStore.load()) ?? [:])
         let (addr, _) = ConfigStore.httpConfig(from: json)
-        serverActionItem.title = server.state.isUp ? "Server: stop" : "Server: start"
+        let up = server.state.isUp
+        // The registered stop key is shown on the stop item so it is findable
+        // without opening settings; nothing is appended when it is off, or while
+        // the server is down (there is nothing to stop then).
+        let hk = up ? (Hotkey.parse(ConfigStore.hotkey(from: json)).map { " (\(Hotkey.glyphs($0)))" } ?? "") : ""
+        serverActionItem.title = (up ? "Server: stop" : "Server: start") + hk
         // The dot badge mirrors the server state (template ink, so it takes
         // the menu bar's tint like the symbol itself). Swap only on a flip.
-        let up = server.state.isUp
         if menuIconShownBadged != up {
             menuIconShownBadged = up
             statusItem.button?.image = up ? menuIconActive : menuIconIdle

@@ -60,33 +60,6 @@ func TestLoad_partialFile_fillsDefaults(t *testing.T) {
 	}
 }
 
-// TestLoad_legacyOCRKeyIgnored: OCR was removed from the tool surface (the
-// model reads the screen with its own vision), but configs written before that
-// still carry an "ocr" section. Loading must keep working and saving must drop
-// the stale key.
-func TestLoad_legacyOCRKeyIgnored(t *testing.T) {
-	tempDir(t)
-	p := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(p, []byte(`{"mode":"app","ocr":{"languages":["en"],"level":"accurate"}}`), 0o644)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatalf("legacy ocr key broke Load: %v", err)
-	}
-	if c.Mode != "app" {
-		t.Fatalf("mode = %q, want app", c.Mode)
-	}
-	if err := Save(p, c); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if strings.Contains(string(b), `"ocr"`) {
-		t.Fatalf("saved config still has an ocr key: %s", b)
-	}
-}
-
 func TestSaveLoad_roundTrip(t *testing.T) {
 	tempDir(t)
 	p := filepath.Join(t.TempDir(), "config.json")
@@ -180,6 +153,47 @@ func TestSaveLoad_accessRoundTrip(t *testing.T) {
 	}
 	if got.Access != "read_only" {
 		t.Fatalf("round-trip access = %q, want read_only", got.Access)
+	}
+}
+
+// TestSaveLoad_hotkeyRoundTrip: "hotkey" belongs to the menu-bar app (the
+// server never reads it), but it must survive a server-side Save — set_target
+// rewrites the whole file, and any key missing from the struct is dropped.
+func TestSaveLoad_hotkeyRoundTrip(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	c := Defaults()
+	c.Hotkey = "ctrl+opt+f9"
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Hotkey != "ctrl+opt+f9" {
+		t.Fatalf("hotkey = %q, want ctrl+opt+f9", got.Hotkey)
+	}
+	// A config without the key must come back as the app's default, not as "":
+	// the app reads "" as "hotkey disabled", so an empty default would silently
+	// switch the kill key off the first time set_target rewrote the file.
+	os.WriteFile(p, []byte(`{"mode":"app"}`), 0o644)
+	got, err = Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Hotkey != "f9" {
+		t.Fatalf("hotkey default = %q, want f9", got.Hotkey)
+	}
+	if err := Save(p, got); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(b), `"hotkey": "f9"`) {
+		t.Fatalf("saved config lost the hotkey: %s", b)
 	}
 }
 

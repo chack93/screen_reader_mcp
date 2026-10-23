@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 /// Reads/writes ~/.config/screenreader/config.json.
-/// Mutates only app/title/mode/screen/rect/http/access; preserves every other key.
+/// Mutates only app/title/mode/screen/rect/http/access/hotkey; preserves every other key.
 public enum ConfigStore {
     public static let defaultPath: String =
         NSHomeDirectory() + "/.config/screenreader/config.json"
@@ -86,6 +86,19 @@ public enum ConfigStore {
     public static func applyAccess(_ access: String, to json: [String: Any]) -> [String: Any] {
         var out = json
         out["access"] = access
+        return out
+    }
+
+    /// Global "stop the server" hotkey spec ("f9" default; "off" disables it).
+    /// App-owned: the Go server only carries the value through config.json.
+    public static func hotkey(from json: [String: Any]) -> String {
+        json["hotkey"] as? String ?? Hotkey.defaultSpec
+    }
+
+    /// Sets the stop hotkey spec only; preserves every other key.
+    public static func applyHotkey(_ spec: String, to json: [String: Any]) -> [String: Any] {
+        var out = json
+        out["hotkey"] = spec
         return out
     }
 

@@ -3,6 +3,12 @@ import ScreenReaderKit
 
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let server: ServerProcess
+    /// Tells the app to re-register the global stop hotkey after a config write.
+    private let hotkeyChanged: (String) -> Void
+    /// Tells the app to suspend/restore the global stop hotkey while the
+    /// recorder listens (Carbon swallows keypresses it recognizes as hotkeys,
+    /// so the currently assigned key would never reach the recorder).
+    private let hotkeySuspended: (Bool) -> Void
     private var permStatus: [TCCPermission: NSTextField] = [:]
     private var grantButton: NSButton!
     private var segmented: NSSegmentedControl!
@@ -13,19 +19,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var screenPicker: NSPopUpButton!
     private var rectLabel: NSTextField!
     private var serverLabel: NSTextField!
+    private var rootStack: NSStackView!
     private var serverButton: NSButton!
     private var snippetView: NSTextView!
     private var stderrView: NSTextView!
     private var accessSegmented: NSSegmentedControl!
     private var accessCaption: NSTextField!
+    private var hotkeyRecorder: HotkeyRecorder!
     private var lastAccessKey = ""
+    private var lastHotkeyKey = ""
     private var lastModeKey = ""
     private var lastScreensFingerprint = ""
     private var timer: Timer?
 
-    init(server: ServerProcess) {
+    init(server: ServerProcess, hotkeyChanged: @escaping (String) -> Void,
+         hotkeySuspended: @escaping (Bool) -> Void) {
         self.server = server
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 715),
+        self.hotkeyChanged = hotkeyChanged
+        self.hotkeySuspended = hotkeySuspended
+        // Starting height only — fitToContent() sizes the window to its
+        // sections on the first refresh and whenever they show/hide.
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
         win.title = "Screen Reader MCP"
         win.center()
@@ -48,7 +62,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// .automation probe (a blocking osascript + waitUntilExit, ~100–300 ms) on
     /// the main thread. Without this, closing the window leaves that stall
     /// running for the app's entire life (settingsWC is cached in AppDelegate).
-    func windowWillClose(_ notification: Notification) { timer?.invalidate() }
+    func windowWillClose(_ notification: Notification) {
+        hotkeyRecorder?.cancel()   // a live recorder holds a local event monitor
+                                   // (and would leave the hotkey suspended)
+        timer?.invalidate()
+    }
 
     // MARK: - Build
 
@@ -56,6 +74,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let root = stack(.vertical)
         root.spacing = 14
         root.alignment = .leading
+        rootStack = root
 
         // --- Permissions ---
         let perms = stack(.vertical)
@@ -76,6 +95,33 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         grantButton = NSButton(title: "Grant access", target: self, action: #selector(grantAll))
         perms.addArrangedSubview(grantButton)
         root.addArrangedSubview(perms)
+
+        // --- Keyboard shortcut ---
+        // The stop key is its own section (like Target: fixed 420 width +
+        // .centerX, so the NSStackView never sizes to a narrower child and the
+        // title and row stay centered). Carbon registers it, so no extra TCC
+        // grant is involved.
+        let hkSection = stack(.vertical)
+        hkSection.alignment = .centerX
+        hkSection.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        hkSection.addArrangedSubview(sectionTitle("Keyboard shortcut"))
+        // Row is the full 420 width: "Stop server" pins left, a spacer pushes
+        // reassign/recorder/Clear to the right edge.
+        let hkRow = stack(.horizontal)
+        hkRow.spacing = 8
+        hkRow.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        hkRow.addArrangedSubview(NSTextField(labelWithString: "Stop server"))
+        hkRow.addArrangedSubview(NSView())   // spacer
+        hkRow.addArrangedSubview(NSTextField(labelWithString: "reassign:"))
+        hotkeyRecorder = HotkeyRecorder()
+        hotkeyRecorder.onChange = { [weak self] combo in
+            self?.saveHotkey(Hotkey.format(combo))
+        }
+        hotkeyRecorder.onRecordingChange = { [weak self] s in self?.hotkeySuspended(s) }
+        hkRow.addArrangedSubview(hotkeyRecorder)
+        hkRow.addArrangedSubview(NSButton(title: "Clear", target: self, action: #selector(hotkeyClear)))
+        hkSection.addArrangedSubview(hkRow)
+        root.addArrangedSubview(hkSection)
 
         // --- Target ---
         let target = stack(.vertical)
@@ -152,6 +198,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                                            action: #selector(copySnippet)))
         srvRow.widthAnchor.constraint(equalToConstant: 420).isActive = true
         srv.addArrangedSubview(srvRow)
+
         snippetView = readOnlyTextView(height: 110)
         srv.addArrangedSubview(snippetView)
         stderrView = readOnlyTextView(height: 50)
@@ -234,7 +281,31 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             accessCaption.stringValue = accessCaptionText(acc)
         }
 
+        // Same guard as mode/access, plus one of its own: never rewrite the
+        // recorder while the user is mid-recording, or the 2 s tick would fight
+        // the "Press keys…" label.
+        let hk = ConfigStore.hotkey(from: json)
+        if hk != lastHotkeyKey, !hotkeyRecorder.isRecording {
+            lastHotkeyKey = hk
+            hotkeyRecorder.setBinding(hk)
+        }
+
         syncScreenPicker()
+        fitToContent()
+    }
+
+    /// Keep the window exactly as tall as its sections (top edge stays put):
+    /// the Grant-access button, stderr view and mode rows show and hide, so a
+    /// fixed height either leaves dead space or clips.
+    private func fitToContent() {
+        guard let win = window, let root = rootStack else { return }
+        let cur = win.contentRect(forFrameRect: win.frame)
+        let need = ceil(root.fittingSize.height) + 32   // 16 top + 16 bottom margins
+        guard abs(cur.height - need) > 1 else { return }
+        win.setContentSize(NSSize(width: cur.width, height: need))
+        var f = win.frame
+        f.origin.y += cur.height - need   // AppKit grows upward: keep the top edge
+        win.setFrameOrigin(NSPoint(x: f.minX, y: f.minY))
     }
 
     private func updateModeRows() {
@@ -274,17 +345,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         guard key != lastAccessKey else { return }
         lastAccessKey = key
         accessCaption.stringValue = accessCaptionText(key)
-        do {
-            let json = try ConfigStore.load()
-            try ConfigStore.save(ConfigStore.applyAccess(key, to: json))
-        } catch {
-            let a = NSAlert()
-            a.messageText = "Config write failed"
-            a.informativeText = "\(error)\nThe app will not overwrite config.json — fix it by hand."
-            a.runModal()
-        }
-        refresh()
+        saveConfig { ConfigStore.applyAccess(key, to: $0) }
     }
+
+    /// Records a new stop key: persist it, then have the app re-register the
+    /// Carbon hotkey so the change is live without a relaunch. On a failed
+    /// write the old binding stays registered — it is still what config says.
+    private func saveHotkey(_ spec: String) {
+        lastHotkeyKey = spec
+        hotkeyRecorder.setBinding(spec)
+        if saveConfig({ ConfigStore.applyHotkey(spec, to: $0) }) {
+            hotkeyChanged(spec)
+        }
+    }
+
+    /// "Clear" in the Keyboard shortcut section: drops the binding (config "off").
+    @objc private func hotkeyClear() { saveHotkey("off") }
 
     private func accessCaptionText(_ access: String) -> String {
         if access == "read_only" {
@@ -418,18 +494,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         o.present()
     }
 
-    /// Load-modify-save; on a malformed config, ALERT and touch nothing.
     private func saveTarget(_ t: ConfigStore.Target) {
+        saveConfig { ConfigStore.applyTarget(t, to: $0) }
+    }
+
+    /// Every settings write goes through here: load-modify-save, and on a
+    /// malformed config ALERT and touch nothing. Returns false when the file was
+    /// left alone, so callers skip follow-ups that assume it changed. Always
+    /// refreshes the UI afterwards.
+    @discardableResult
+    private func saveConfig(_ transform: ([String: Any]) -> [String: Any]) -> Bool {
+        var ok = true
         do {
-            let json = try ConfigStore.load()
-            try ConfigStore.save(ConfigStore.applyTarget(t, to: json))
+            try ConfigStore.save(transform(try ConfigStore.load()))
         } catch {
+            ok = false
             let a = NSAlert()
             a.messageText = "Config write failed"
             a.informativeText = "\(error)\nThe app will not overwrite config.json — fix it by hand."
             a.runModal()
         }
         refresh()
+        return ok
     }
 
     @objc private func toggleServer() { server.toggle() }

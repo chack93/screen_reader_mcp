@@ -3,7 +3,7 @@
 # Go binary embedded, and codesigns both. Requires Go + Xcode toolchain.
 # Optional (recommended, one-time): a self-signed codesigning identity named
 # "ScreenReader Dev" — without it signing is ad-hoc and TCC grants reset on
-# every rebuild (see README "ScreenReader app" section).
+# every rebuild (see docs/reference.md "App details").
 set -euo pipefail
 cd "$(dirname "$0")"
 
