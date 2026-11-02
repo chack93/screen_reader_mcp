@@ -31,52 +31,80 @@ func TestDefaults(t *testing.T) {
 	if c.Capture.MaxWidth != 0 {
 		t.Fatalf("capture.max_width default = %d, want 0 (native resolution)", c.Capture.MaxWidth)
 	}
-	// Region capture stays the default: window capture changes what the image
-	// contains, so nothing may flip it without the user asking.
-	if c.Capture.Window {
-		t.Fatal("capture.window default = true, want false (region capture)")
+	// capture.window unset means "auto": an app target is captured as that window
+	// alone, so nothing quietly grabs the region behind it instead.
+	if c.Capture.Window != nil {
+		t.Fatalf("capture.window default = %t, want nil (auto)", *c.Capture.Window)
 	}
 }
 
-func TestWindowCapture_precedence(t *testing.T) {
+func TestWindowPreference(t *testing.T) {
 	yes, no := true, false
-	off := Defaults()
+	if got := Defaults().WindowPreference(); got != nil {
+		t.Fatalf("unset capture.window must report auto (nil), got %t", *got)
+	}
 	on := Defaults()
-	on.Capture.Window = true
-
-	if off.WindowCapture(nil) || off.WindowCapture(&no) {
-		t.Fatal("region capture expected when config is off and no override says true")
+	on.Capture.Window = &yes
+	if got := on.WindowPreference(); got == nil || !*got {
+		t.Fatal("capture.window=true must report true")
 	}
-	if !off.WindowCapture(&yes) {
-		t.Fatal("per-call window:true must enable window capture over the config default")
-	}
-	if !on.WindowCapture(nil) {
-		t.Fatal("config capture.window must apply when no override is given")
-	}
-	if on.WindowCapture(&no) {
-		t.Fatal("per-call window:false must override capture.window=true")
+	off := Defaults()
+	off.Capture.Window = &no
+	if got := off.WindowPreference(); got == nil || *got {
+		t.Fatal("capture.window=false must report false, not auto")
 	}
 }
 
 func TestLoad_captureWindow(t *testing.T) {
 	tempDir(t)
 	p := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(p, []byte(`{"capture":{"max_width":1200,"window":true}}`), 0o644)
+	os.WriteFile(p, []byte(`{"capture":{"max_width":1200,"window":false}}`), 0o644)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if c.Capture.MaxWidth != 1200 || !c.Capture.Window {
+	if c.Capture.MaxWidth != 1200 || c.Capture.Window == nil || *c.Capture.Window {
 		t.Fatalf("capture config not loaded: %+v", c.Capture)
 	}
 }
 
-func TestSaveLoad_captureWindowRoundTrip(t *testing.T) {
-	// set_target rewrites the whole file, so the capture block must survive it.
+func TestLoad_captureWindowAbsentIsAuto(t *testing.T) {
+	// A config written before window capture existed (or by the app, which never
+	// writes this key) must stay on auto instead of decaying into "false".
 	tempDir(t)
 	p := filepath.Join(t.TempDir(), "config.json")
-	c := Defaults()
-	c.Capture.Window = true
+	os.WriteFile(p, []byte(`{"capture":{"max_width":1200}}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if c.Capture.Window != nil {
+		t.Fatalf("capture.window = %t, want nil (auto)", *c.Capture.Window)
+	}
+}
+
+func TestSaveLoad_captureWindowRoundTrip(t *testing.T) {
+	// set_target rewrites the whole file, so the capture block must survive it —
+	// including "false", a deliberate opt-out that must not decay back to auto.
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	yes, no := true, false
+	for _, want := range []*bool{&yes, &no} {
+		c := Defaults()
+		c.Capture.Window = want
+		if err := Save(p, c); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		got, err := Load(p)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got.Capture.Window == nil || *got.Capture.Window != *want {
+			t.Fatalf("capture.window=%t lost in round-trip: %+v", *want, got.Capture)
+		}
+	}
+
+	c := Defaults() // nil is omitted from the file, so auto stays auto
 	if err := Save(p, c); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -84,8 +112,8 @@ func TestSaveLoad_captureWindowRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !got.Capture.Window {
-		t.Fatalf("capture.window lost in round-trip: %+v", got.Capture)
+	if got.Capture.Window != nil {
+		t.Fatalf("auto must round-trip as auto, got %t", *got.Capture.Window)
 	}
 }
 

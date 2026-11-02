@@ -21,6 +21,20 @@ func MapImageToScreen(imgX, imgY, imgW, imgH int, r Rect) (sx, sy int) {
 	return sx, sy
 }
 
+// Area is the rect's size in square units (0 for an empty rect).
+func (r Rect) Area() int { return r.W * r.H }
+
+// Intersect returns the overlap of a and b, or an empty rect when they do not
+// overlap. Both must be in the same coordinate space (screen-absolute points).
+func Intersect(a, b Rect) Rect {
+	x1, y1 := max(a.X, b.X), max(a.Y, b.Y)
+	x2, y2 := min(a.X+a.W, b.X+b.W), min(a.Y+a.H, b.Y+b.H)
+	if x2 <= x1 || y2 <= y1 {
+		return Rect{}
+	}
+	return Rect{X: x1, Y: y1, W: x2 - x1, H: y2 - y1}
+}
+
 // ScaleDown returns (w,h) fitting maxWidth while preserving aspect ratio.
 // maxWidth<=0 or imgW<=maxWidth returns the original size.
 func ScaleDown(imgW, imgH, maxWidth int) (w, h int) {

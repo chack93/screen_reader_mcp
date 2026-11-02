@@ -2,7 +2,6 @@ package window
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"screenreader/internal/geom"
@@ -20,34 +19,48 @@ type Candidate struct {
 }
 
 // Match picks the candidate an app/title target refers to, with Resolve's
-// semantics: title is a regex and an empty title takes the app's first window.
-// The app name is compared case-insensitively because ScreenCaptureKit's owner
-// name can differ in case from the AppleScript process name, and an on-screen
-// window wins over a minimized one of the same app+title (minimized windows may
-// not capture).
+// semantics: title is a regex with a literal fallback (see titleFilter), and an
+// empty title takes the app's first window. The app name is compared
+// case-insensitively because ScreenCaptureKit's owner name can differ in case
+// from the AppleScript process name, and an on-screen window wins over a
+// minimized one of the same app+title (minimized windows may not capture).
 func Match(cands []Candidate, app, title string) (Candidate, error) {
 	if app == "" {
 		return Candidate{}, fmt.Errorf("window capture needs an app target (set_target app=...)")
 	}
-	var re *regexp.Regexp
-	if title != "" {
-		r, err := regexp.Compile(title)
-		if err != nil {
-			return Candidate{}, fmt.Errorf("invalid title regex %q: %w", title, err)
-		}
-		re = r
+	f, err := newTitleFilter(title)
+	if err != nil {
+		return Candidate{}, err
 	}
-	var minimized *Candidate
-	for i := range cands {
-		c := cands[i]
-		if !strings.EqualFold(c.App, app) {
-			continue
+	var owned []Candidate
+	for _, c := range cands {
+		if strings.EqualFold(c.App, app) {
+			owned = append(owned, c)
 		}
-		if re != nil && !re.MatchString(c.Title) {
+	}
+	// Same order as selectTitle: the regex sees the whole list before the literal
+	// pass is allowed to select anything.
+	if c, ok := pick(owned, func(c Candidate) bool { return f.matchRegex(c.Title) }); ok {
+		return c, nil
+	}
+	if c, ok := pick(owned, func(c Candidate) bool { return f.matchLiteral(c.Title) }); ok {
+		return c, nil
+	}
+	return Candidate{}, fmt.Errorf("no window for app %q (title %q): %s", app, title, nearMiss(cands, app))
+}
+
+// pick returns the first candidate the predicate selects, preferring an on-screen
+// one: a minimized window is still the window the target names, but a visible
+// twin is the better answer because a minimized one may not be shareable.
+func pick(list []Candidate, match func(Candidate) bool) (Candidate, bool) {
+	var minimized *Candidate
+	for i := range list {
+		c := list[i]
+		if !match(c) {
 			continue
 		}
 		if c.OnScreen {
-			return c, nil
+			return c, true
 		}
 		if minimized == nil {
 			saved := c
@@ -55,9 +68,9 @@ func Match(cands []Candidate, app, title string) (Candidate, error) {
 		}
 	}
 	if minimized != nil {
-		return *minimized, nil
+		return *minimized, true
 	}
-	return Candidate{}, fmt.Errorf("no window for app %q (title %q): %s", app, title, nearMiss(cands, app))
+	return Candidate{}, false
 }
 
 // nearMiss explains a failed match: ScreenCaptureKit sees no window for that

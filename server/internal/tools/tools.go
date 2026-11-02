@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-vgo/robotgo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -116,10 +117,10 @@ func RegisterReading(server *mcp.Server, access string) {
 		Title    string     `json:"title,omitempty" jsonschema:"Window title regex override"`
 		Rect     *geom.Rect `json:"rect,omitempty" jsonschema:"Pinned screen-absolute region {x,y,w,h}"`
 		MaxWidth int        `json:"max_width,omitempty" jsonschema:"Downscale to this width in px (0 = config default, negative = native resolution)"`
-		Window   *bool      `json:"window,omitempty" jsonschema:"Capture only the app window so windows on top of it are excluded (default: config capture.window); false = grab the screen region as before"`
+		Window   *bool      `json:"window,omitempty" jsonschema:"true = only that app window (overlapping windows excluded); false = the screen region as seen, overlaps included; default is automatic per target kind"`
 	}
 
-	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. With window: true an app target is captured as that window alone: overlapping windows are excluded and it does not have to be frontmost."},
+	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. An app target is captured as that window alone (overlapping windows excluded, no need to focus it); a pinned rect or whole screen is captured as it appears on screen, overlaps included. window: false forces the region grab for an app target."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a regionArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
 			spec, err := classifyTarget(cfg, a.App, a.Title, a.Rect)
@@ -131,27 +132,20 @@ func RegisterReading(server *mcp.Server, access string) {
 				mw = cfg.Capture.MaxWidth
 			}
 
-			wantWindow := cfg.WindowCapture(a.Window)
-			if wantWindow && spec.Kind != kindApp {
-				if a.Window != nil {
-					// Asked for one window, but the target is a pinned region or a whole
-					// screen: say so instead of quietly returning the old
-					// everything-in-the-rect image.
-					return errResult(fmt.Errorf("window capture needs an app target (this target is %s) — drop window:true or set_target app=...", spec.Kind)), nil, nil
-				}
-				// Only the config default asked for it: a target with no window to
-				// isolate keeps the region path it has always used.
-				wantWindow = false
+			useWindow, err := wantsWindow(cfg, spec.Kind, a.Window)
+			if err != nil {
+				return errResult(err), nil, nil
 			}
-			if wantWindow {
-				res, id, err := captureWindow(spec, mw)
+			if useWindow {
+				shot, err := captureWindow(spec, mw)
 				if err != nil {
 					return errResult(err), nil, nil
 				}
-				b := res.Bounds
+				b := shot.res.Bounds
 				return &mcp.CallToolResult{Content: []mcp.Content{
-					&mcp.ImageContent{Data: res.PNG, MIMEType: "image/png"},
-					&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d source=window id=%d", b.X, b.Y, b.W, b.H, res.ImgW, res.ImgH, id)},
+					&mcp.ImageContent{Data: shot.res.PNG, MIMEType: "image/png"},
+					&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d source=window id=%d%s",
+						b.X, b.Y, b.W, b.H, shot.res.ImgW, shot.res.ImgH, shot.id, shot.occluded)},
 				}}, nil, nil
 			}
 
@@ -170,24 +164,96 @@ func RegisterReading(server *mcp.Server, access string) {
 		})
 }
 
-// captureWindow resolves an app target to one ScreenCaptureKit window and
-// renders just that window. Errors name the way out, because window capture is
-// opt-in: falling back silently would hand back an image with other windows in
-// it while the caller believes it is clean.
-func captureWindow(spec targetSpec, maxWidth int) (*capture.Result, uint32, error) {
+// wantsWindow decides how a target is captured. An explicit per-call window
+// argument wins; otherwise capture.window in the config, and otherwise "auto":
+// an app target is captured as that window alone, while a pinned rect or a whole
+// screen has no window to isolate and keeps the region grab.
+//
+// Asking for a window explicitly on a target that has none is an error rather
+// than a quiet region grab — that is how a caller learns its request cannot be
+// honored. A config-level capture.window: true does not break a rect/screen
+// target, because switching the app's target must not break capture.
+func wantsWindow(cfg *config.Config, kind targetKind, override *bool) (bool, error) {
+	if override != nil {
+		if *override && kind != kindApp {
+			return false, fmt.Errorf("window capture needs an app target (this target is %s) — drop window:true or set_target app=...", kind)
+		}
+		return *override, nil
+	}
+	if pref := cfg.Capture.Window; pref != nil {
+		return *pref && kind == kindApp, nil
+	}
+	return kind == kindApp, nil
+}
+
+// windowShot is a rendered single-window capture plus what the reader needs to
+// know about the image it did not ask for.
+type windowShot struct {
+	res      *capture.Result
+	id       uint32
+	occluded string // " occluded=…" suffix ("" when the stack could not answer)
+}
+
+// captureWindow resolves an app target to one ScreenCaptureKit window and renders
+// just that window. It fails loudly instead of falling back to the region grab:
+// an image that looks clean but contains other windows is worse than an error,
+// and clicking on a pixel that belongs to another window is worse still.
+func captureWindow(spec targetSpec, maxWidth int) (*windowShot, error) {
 	cands, err := sck.Windows()
 	if err != nil {
-		return nil, 0, fmt.Errorf("window capture: %v (this needs the Screen Recording grant for the hosting app — run doctor; window:false uses the region grab, which works without it)", err)
+		return nil, fmt.Errorf("window capture: %v (needs the Screen Recording grant for the hosting app — run doctor; window:false captures the screen region instead, which works without it)", err)
 	}
 	cand, err := window.Match(cands, spec.App, spec.Title)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	res, err := capture.CaptureWindow(cand, maxWidth)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return res, cand.ID, nil
+	return &windowShot{res: res, id: cand.ID, occluded: occlusionNote(cand.ID)}, nil
+}
+
+// occlusionNote names the windows stacked above the captured one, because input
+// is real cursor events at screen points: a click aimed at an occluded pixel
+// lands on the covering window, not on the window the image shows. Best effort —
+// CGWindowList needs no extra grant, but when the captured window is not in the
+// list (minimized, another Space) nothing is claimed and the suffix is left off.
+func occlusionNote(id uint32) string {
+	stack, err := colist.Stack()
+	if err != nil {
+		return ""
+	}
+	covers, found := window.Covering(stack, int(id))
+	if !found {
+		return ""
+	}
+	if len(covers) == 0 {
+		return " occluded=no"
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, w := range covers {
+		name := w.Owner
+		if name == "" {
+			name = w.Title
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return " occluded=yes"
+	}
+	const maxNames = 3
+	suffix := ""
+	if len(names) > maxNames {
+		suffix = fmt.Sprintf(" +%d more", len(names)-maxNames)
+		names = names[:maxNames]
+	}
+	return " occluded=" + strings.Join(names, ", ") + suffix
 }
 
 // orDefault returns d when s is empty.
@@ -426,15 +492,19 @@ func RegisterTarget(server *mcp.Server, access string) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("focused %s %+v", app, r)}}}, nil, nil
 		})
 
-	add(server, access, "window_info", &mcp.Tool{Name: "window_info", Description: "Report the resolved target (app, title, mode, bounds)."},
+	add(server, access, "window_info", &mcp.Tool{Name: "window_info", Description: "Report the resolved target (app, title, mode, bounds) and how it will be captured."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
-			r, err := resolveRect(cfg, "", "", nil)
+			spec, err := classifyTarget(cfg, "", "", nil)
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			r, err := spec.rect()
 			if err != nil {
 				return errResult(err), nil, nil
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
-				Text: fmt.Sprintf("mode=%s screen=%d app=%q title=%q bounds=%+v capture=%s", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, r, captureMode(cfg)),
+				Text: fmt.Sprintf("mode=%s screen=%d app=%q title=%q bounds=%+v capture=%s", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, r, captureMode(cfg.WindowPreference(), spec.Kind)),
 			}}}, nil, nil
 		})
 
@@ -557,9 +627,18 @@ func permLine(name string, ok bool, hint string) string {
 	return "  " + name + ": " + status + "\n"
 }
 
-// captureMode names how app targets are captured by default.
-func captureMode(cfg *config.Config) string {
-	if cfg.Capture.Window {
+// captureMode names the capture path a target would take under the configured
+// preference, for window_info and doctor. "window(auto)"/"region(auto)" is what
+// the default means: app targets are captured as that window alone, rect and
+// screen targets as the region on screen.
+func captureMode(pref *bool, kind targetKind) string {
+	if pref == nil {
+		if kind == kindApp {
+			return "window(auto)"
+		}
+		return "region(auto)"
+	}
+	if *pref && kind == kindApp {
 		return "window"
 	}
 	return "region"
@@ -571,7 +650,7 @@ func captureMode(cfg *config.Config) string {
 // window capture fail — so ask it directly instead of inferring it from the
 // screen_recording line above.
 func windowCaptureLine(cfg *config.Config) string {
-	def := captureMode(cfg)
+	def := captureMode(cfg.WindowPreference(), kindApp)
 	if !sck.Available() {
 		return fmt.Sprintf("  window_capture: unavailable (macOS %s — needs macOS 14+; region capture works) default=%s\n", sck.OSVersion(), def)
 	}

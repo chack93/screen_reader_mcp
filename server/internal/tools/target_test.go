@@ -92,13 +92,73 @@ func TestClassifyTarget(t *testing.T) {
 	})
 }
 
-func TestCaptureMode(t *testing.T) {
-	if got := captureMode(config.Defaults()); got != "region" {
-		t.Fatalf("default capture mode = %q, want region", got)
+func TestWantsWindow(t *testing.T) {
+	yes, no := true, false
+	auto := config.Defaults()
+	on := config.Defaults()
+	on.Capture.Window = &yes
+	off := config.Defaults()
+	off.Capture.Window = &no
+
+	// Auto: an app target renders that window; a rect or a screen has none.
+	if got, err := wantsWindow(auto, kindApp, nil); err != nil || !got {
+		t.Fatalf("auto + app: got %t (err %v), want window capture", got, err)
 	}
-	cfg := config.Defaults()
-	cfg.Capture.Window = true
-	if got := captureMode(cfg); got != "window" {
-		t.Fatalf("capture mode = %q, want window", got)
+	for _, kind := range []targetKind{kindRect, kindScreen} {
+		if got, err := wantsWindow(auto, kind, nil); err != nil || got {
+			t.Fatalf("auto + %s: got %t (err %v), want the region grab", kind, got, err)
+		}
+	}
+
+	// Asking for a window on a target that has none must fail, not quietly return
+	// the everything-in-the-rect image; asking not to is always allowed.
+	for _, kind := range []targetKind{kindRect, kindScreen} {
+		if _, err := wantsWindow(auto, kind, &yes); err == nil || !strings.Contains(err.Error(), "needs an app target") {
+			t.Fatalf("window:true + %s: want an error, got %v", kind, err)
+		}
+		if got, err := wantsWindow(auto, kind, &no); err != nil || got {
+			t.Fatalf("window:false + %s: got %t (err %v), want the region grab", kind, got, err)
+		}
+	}
+
+	// A config-level true must not break a rect/screen target: switching the app's
+	// target kind cannot be expected to come with editing the capture block.
+	if got, err := wantsWindow(on, kindRect, nil); err != nil || got {
+		t.Fatalf("capture.window=true + rect: got %t (err %v), want the region grab", got, err)
+	}
+
+	// false is the escape hatch back to the region grab from either place, and the
+	// per-call argument always beats the config.
+	if got, err := wantsWindow(off, kindApp, nil); err != nil || got {
+		t.Fatalf("capture.window=false + app: got %t (err %v), want the region grab", got, err)
+	}
+	if got, err := wantsWindow(auto, kindApp, &no); err != nil || got {
+		t.Fatalf("window:false + app: got %t (err %v), want the region grab", got, err)
+	}
+	if got, err := wantsWindow(on, kindApp, &no); err != nil || got {
+		t.Fatalf("window:false vs capture.window=true: got %t (err %v), want the per-call answer", got, err)
+	}
+	if got, err := wantsWindow(off, kindApp, &yes); err != nil || !got {
+		t.Fatalf("window:true vs capture.window=false: got %t (err %v), want window capture", got, err)
+	}
+}
+
+func TestCaptureMode(t *testing.T) {
+	auto := config.Defaults()
+	if got := captureMode(auto.WindowPreference(), kindApp); got != "window(auto)" {
+		t.Fatalf("auto + app = %q, want window(auto)", got)
+	}
+	if got := captureMode(auto.WindowPreference(), kindRect); got != "region(auto)" {
+		t.Fatalf("auto + rect = %q, want region(auto)", got)
+	}
+	yes, no := true, false
+	if got := captureMode(&yes, kindApp); got != "window" {
+		t.Fatalf("true + app = %q, want window", got)
+	}
+	if got := captureMode(&no, kindApp); got != "region" {
+		t.Fatalf("false + app = %q, want region", got)
+	}
+	if got := captureMode(&yes, kindScreen); got != "region" {
+		t.Fatalf("true + screen = %q, want region (no window to isolate)", got)
 	}
 }

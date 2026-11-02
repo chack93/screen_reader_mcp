@@ -32,3 +32,35 @@ func TestScaleDown(t *testing.T) {
 		t.Fatalf("negative-max got (%d,%d) want (800,600)", w, h)
 	}
 }
+
+func TestRectArea(t *testing.T) {
+	if got := (Rect{X: 5, Y: 5, W: 10, H: 4}).Area(); got != 40 {
+		t.Fatalf("Area = %d, want 40", got)
+	}
+	if got := (Rect{}).Area(); got != 0 {
+		t.Fatalf("empty Area = %d, want 0", got)
+	}
+}
+
+func TestIntersect(t *testing.T) {
+	a := Rect{X: 0, Y: 30, W: 1279, H: 1570}
+	b := Rect{X: 1000, Y: 300, W: 400, H: 300}
+	if got := Intersect(a, b); got != (Rect{X: 1000, Y: 300, W: 279, H: 300}) {
+		t.Fatalf("overlap = %+v, want {1000,300,279,300}", got)
+	}
+	// Touching edges do not overlap (zero-area intersection would skew ratios).
+	if got := Intersect(Rect{X: 0, Y: 0, W: 10, H: 10}, Rect{X: 10, Y: 0, W: 10, H: 10}); got.Area() != 0 {
+		t.Fatalf("touching rects overlap: %+v", got)
+	}
+	// Containment returns the smaller rect unchanged.
+	if got := Intersect(Rect{X: 0, Y: 0, W: 100, H: 100}, Rect{X: 10, Y: 10, W: 20, H: 20}); got != (Rect{X: 10, Y: 10, W: 20, H: 20}) {
+		t.Fatalf("containment = %+v", got)
+	}
+	if got := Intersect(Rect{X: 0, Y: 0, W: 10, H: 10}, Rect{X: 50, Y: 50, W: 10, H: 10}); got.Area() != 0 {
+		t.Fatalf("disjoint rects overlap: %+v", got)
+	}
+	// Negative-origin rects (secondary displays left of the main one) work too.
+	if got := Intersect(Rect{X: -1800, Y: 431, W: 1800, H: 1169}, Rect{X: -1000, Y: 500, W: 400, H: 300}); got.Area() != 400*300 {
+		t.Fatalf("secondary-display overlap = %+v", got)
+	}
+}

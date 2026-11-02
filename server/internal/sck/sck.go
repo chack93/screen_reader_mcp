@@ -157,6 +157,7 @@ int sr_sck_windows(SRWin **out, char **err) {
       recs[count].onscreen = w.isOnScreen ? 1 : 0;
       count++;
     }
+    *out = recs; // caller owns the array now (released by sr_sck_free_windows)
     return count;
   }
   sr_set_err(err, SR_NEEDS_14);
@@ -264,9 +265,13 @@ int sr_sck_render(void *handle, int width, int height,
       sr_set_err(err, @"could not build a bitmap context");
       return -1;
     }
-    // CGContext is bottom-up; flip so row 0 is the top row (image.RGBA order).
-    CGContextTranslateCTM(ctx, 0, (CGFloat)h);
-    CGContextScaleCTM(ctx, 1.0, -1.0);
+    // NO flip here, deliberately. Drawing a CGImage into a CGBitmapContext already
+    // writes top-down bytes (buffer row 0 = image top row): verified with a synthetic
+    // red-top/blue-bottom image (plain draw -> row 0 red; with the translate+scale
+    // flip -> row 0 blue), and against the live screen (flipping the SCK render made
+    // it match the region grab only under a vertical flip, MAD 0.24 vs 178). The
+    // usual "CGContext is bottom-up, flip it" reflex applies to reading a CGImage's
+    // own data provider, not to drawing it — here it produced upside-down captures.
     CGContextSetInterpolationQuality(ctx, kCGInterpolationNone);
     CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), image);
     CGContextRelease(ctx);
@@ -333,6 +338,11 @@ func Windows() ([]window.Candidate, error) {
 	n := C.sr_sck_windows(&recs, &cerr)
 	if n < 0 {
 		return nil, takeErr(cerr)
+	}
+	if recs == nil {
+		// Invariant check: a count without an array means the C shim forgot to
+		// hand it back. unsafe.Slice(nil, n) would segfault the whole server.
+		return nil, fmt.Errorf("ScreenCaptureKit reported %d windows but returned no array", int(n))
 	}
 	out := make([]window.Candidate, 0, int(n))
 	for _, r := range unsafe.Slice(recs, int(n)) {

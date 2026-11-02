@@ -9,7 +9,7 @@ Setup details, configuration, tools, and operations. See the [README](../README.
 - [Release builds (signed + notarized)](#release-builds-signed--notarized)
 - [Permissions](#permissions)
 - [Configure the target](#configure-the-target)
-- [Capturing one window](#capturing-one-window)
+- [What each target captures](#what-each-target-captures)
 - [HTTP mode (manual)](#http-mode-manual)
 - [App details](#app-details)
 - [Stop hotkey](#stop-hotkey)
@@ -64,7 +64,7 @@ macOS TCC requires grants for the app that owns the server process (the menu-bar
 
 After granting any permission, **quit and restart the hosting app** (terminal/opencode) so it picks up the grant. The menu-bar app avoids this churn: grants are cert-anchored to the **ScreenReader Dev** signing identity and survive rebuilds (see [App details](#app-details)).
 
-Window-only capture ([Capturing one window](#capturing-one-window)) uses the same Screen Recording grant, but the grant is not interchangeable in practice: a process that captures fine through the legacy display API can still be refused by ScreenCaptureKit with `-3801 The user declined TCCs`. `doctor` probes it separately on its `window_capture:` line, and region capture keeps working when that line is missing.
+Window-only capture ([What each target captures](#what-each-target-captures)) uses the same Screen Recording grant, but the grant is not interchangeable in practice: a process that captures fine through the legacy display API can still be refused by ScreenCaptureKit with `-3801 The user declined TCCs`. `doctor` probes it separately on its `window_capture:` line. Region capture keeps working when that line is missing — but an app target uses window capture by default, so it reports the refusal instead of quietly falling back; `window: false` is the way back to the region grab.
 
 ## Configure the target
 
@@ -83,33 +83,45 @@ Pick one target mode (or mix — per-call args always win):
   "mode": "app",
   "screen": 0,
   "rect": { "x": 0, "y": 0, "w": 0, "h": 0 },
-  "capture": { "max_width": 0, "window": false },
+  "capture": { "max_width": 0 },
   "input": { "delay_ms": 120 }
 }
 ```
 
 `capture.max_width: 0` (the default) captures at **native resolution**: the image is the model's only reading channel, so only set a width if payloads get too big for your model. A per-call `max_width` overrides it (`-1` forces native even when the config pins a width).
 
-`capture.window: true` makes app targets capture **that window only**, with no other window in frame (see [Capturing one window](#capturing-one-window)). It defaults to `false`, so `capture` keeps grabbing the screen region as before.
+`capture.window` decides how an **app** target is captured and has three states: leave it **out** (the default) for *auto* — an app target is captured as that window alone, a pinned `rect` or a whole screen as it appears on screen (see [What each target captures](#what-each-target-captures)). `"window": true` forces the single-window render for app targets, `"window": false` always takes the region grab.
 
 `hotkey` is the menu-bar app's global stop key (see [Stop hotkey](#stop-hotkey)); `"off"` disables it. The server never reads it — the field is in its config struct only so a `set_target` rewrite cannot drop it.
 
 2. **Call the `set_target` tool** — sets and persists the default target (app/title, a pinned rect with `mode: "rect"`, or a whole display with `mode: "screen"` + `screen: <index>`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
 3. Use `list_windows` to discover the exact app name / title regex / bounds to pin, or `list_screens` to see the display indexes (0 = main) for a screen target.
+4. **Title filters are regexes** (`"Enroll"`, `"Prod|Dev"`), but a filter that matches **no** window is retried as a literal title. That fallback matters because the app's picker stores the real window title verbatim: `Enroll.Prod.W365.Cloud.D - König, Christian (EXT)` compiles as a regex whose `(EXT)` is a capture group, so it demands `Christian EXT` and could never match the window it names. A genuine regex still wins whenever it matches something.
 
-## Capturing one window
+## What each target captures
 
-By default `capture` grabs the **screen region** the target resolves to, so any window floating on top comes back in the image — annoying when the Remote Desktop window is half covered by a browser. `window: true` (or `"capture": { "window": true }` in the config) captures the **window itself** instead: the window server draws just that window, so overlapping windows are excluded and the target does not have to be frontmost or even focused.
+`capture` picks its path from the **target kind**, matching what each target means:
 
-```json
-{ "app": "Windows App", "title": "", "mode": "app", "capture": { "window": true } }
+| Target | What the image contains |
+| --- | --- |
+| app window (`mode: "app"`, the default) | **that window only** — the window server renders it, so windows on top are excluded and it does not have to be frontmost or focused |
+| pinned rectangle (`mode: "rect"`) | the screen **as seen** inside that rect, overlapping windows included |
+| whole display (`mode: "screen"`) | the screen **as seen**, overlapping windows included |
+
+A region target has no window to isolate, so "as seen" is the only honest answer for it; for an app window, isolating it is the point.
+
+```
+bounds={x:1,y:240,w:2360,h:1360} image=2360x1360 source=window id=29410 occluded=no
+bounds={x:1,y:240,w:2360,h:1360} image=2360x1360 source=region
 ```
 
-or per call: `capture { "window": true }`. Reported `bounds` become the window's own frame, so `coords: "image"` clicks map exactly as they do for a region capture; the output line says which path produced the image (`source=window id=29410` / `source=region`).
+The `source=` marker says which path produced the image. In window mode `bounds` is the window's own frame, so `coords: "image"` clicks map exactly as they do for a region capture.
 
-- **Needs macOS 14+** and the Screen Recording grant; `doctor`'s `window_capture:` line reports whether this process can actually use it (a legacy grant that captures fine can still be refused here with `-3801` — toggle Screen Recording off/on for the hosting app and restart it).
-- **Opt-in and loud**: a failed window capture is an error, never a silent fallback to the region grab, because a "clean" image with another window in it is worse than a clear failure. `window: false` forces the old behavior for one call.
-- Only app targets have a window: `window: true` with a pinned `rect` or `mode: "screen"` is refused with a message rather than quietly capturing the region.
+- **`occluded=`** (window mode only) names the windows stacked on top of the captured one, or `no` when nothing covers it. It matters because input is real cursor events at screen points: a click on an occluded pixel lands on the covering window, so `focus_window` first if you need those pixels. It is best effort — nothing is reported when the window is not in the on-screen list (minimized, another Space).
+- **Override per call** with `window: false` to take the region grab anyway (e.g. you *want* to see a floating palette that belongs to another app), or `window: true` to force the single-window render. In the config, `"capture": { "window": false }` pins the region grab and `true` pins window capture for app targets; a config-level `true` never breaks a `rect`/`screen` target — those keep the region grab.
+- **Fails loudly**: if the window cannot be rendered (TCC refused, window not shareable) the call is an error, never a silent fallback to the region grab — a "clean" image with your terminal in it is worse than a clear failure, and clicking a pixel that belongs to another window is worse still. The error names the way out (`window: false`).
+- **Needs macOS 14+** and the Screen Recording grant; `doctor`'s `window_capture:` line reports whether this process can actually use it (a legacy grant that captures fine can still be refused here with `-3801` — toggle Screen Recording off/on for the hosting app and restart it). Region capture is unaffected.
+- Asking explicitly for a window on a target that has none (`window: true` with a pinned `rect` or `mode: "screen"`) is refused with a message rather than quietly capturing the region.
 - Limits: a minimized window, or one on another Space, may not be shareable (bring it forward with `focus_window` first); content backed by a secure surface can come back black.
 
 ## opencode config (stdio)
@@ -198,7 +210,7 @@ without hunting for the menu bar icon. The default is **F9**.
 
 | Tool | Purpose | Key args |
 | --- | --- | --- |
-| `capture` | Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image with your own vision. `window: true` captures the app window alone — overlapping windows excluded, no need to focus it. | `app`, `title`, `rect`, `max_width`, `window` |
+| `capture` | Capture the target as a PNG image, with region bounds and image size. Read on-screen text from the image with your own vision. An app target is captured as that window alone (overlapping windows excluded, no need to focus it); a pinned rect or whole screen as it appears on screen, overlaps included. | `app`, `title`, `rect`, `max_width`, `window` |
 | `click` | Click at screen-absolute (x,y). | `x`, `y`, `button`, `clicks`, `dry_run`, `coords`, `rect`, `img_w`, `img_h` |
 | `move` | Move the cursor to (x,y). | `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
 | `scroll` | Scroll by (dx,dy) at (x,y) if given. | `dx`, `dy`, `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
@@ -209,7 +221,7 @@ without hunting for the menu bar icon. The default is **F9**.
 | `wait` | Sleep for ms milliseconds. | `ms` |
 | `set_target` | Set + persist the default target (app/title, pinned rect, or whole screen). | `app`, `title`, `rect`, `mode` (app\|rect\|screen), `screen`, `clear_app`, `clear_title` |
 | `focus_window` | Activate the target app and raise its window; return bounds. | `app`, `title` |
-| `window_info` | Report the resolved target (mode, screen, app, title, bounds). | — |
+| `window_info` | Report the resolved target (mode, screen, app, title, bounds) and how it will be captured (`capture=window(auto)` / `region`). | — |
 | `list_windows` | List visible windows (app, title, bounds) to choose a target. | — |
 | `list_screens` | List active displays (index, main flag, screen-absolute bounds) to choose a screen target. | — |
 | `doctor` | Self-check: displays, target resolution and permissions. | — |
@@ -244,14 +256,16 @@ This server drives the **real cursor** on your desktop — it is not sandboxed f
 | Symptom | Fix |
 | --- | --- |
 | Black image from `capture` | Grant **Screen Recording**, then restart the hosting app. |
+| `capture` hangs with no result while `/health` still answers | The child is wedged inside the CoreGraphics grab: restart the server from the menu bar app (or `kill` the `screenreader --http` child — the app respawns it). Other tools keep working, so a fast `window_info`/`wait` does not prove capture is alive. |
 | No typing/clicking | Grant **Accessibility**, then restart the hosting app. |
 | `osascript:` errors | Grant **Automation** (System Events), then restart the hosting app. |
 | cgo build failure (`fatal error: 'objc.h' file not found` etc.) | Install Xcode Command Line Tools: `xcode-select --install`. |
 | "no target configured" | Call `set_target` (e.g. `list_windows` first to find the app/title), or edit `~/.config/screenreader/config.json`. |
 | Small text misread in a capture | Re-capture with `max_width: -1` (native pixels) and a tighter `rect`/app target, so the region fills more of the image. |
-| Other windows appear inside a capture | Capture the window instead of the region: `capture { "window": true }` or `capture.window: true` (needs macOS 14+). |
+| Other windows appear inside a capture | An app target already captures that window alone; check `window_info`'s `capture=` (must be `window(auto)`, not `region`). A `rect`/`screen` target captures the screen as seen by design — switch to an app target (`set_target app=...`) to isolate the window (needs macOS 14+). |
 | `window capture: … (-3801) The user declined TCCs` | ScreenCaptureKit is refusing this process even though region capture works: toggle **Screen Recording** off/on for the hosting app and restart it. `doctor`'s `window_capture:` line confirms it; `window: false` restores the region grab meanwhile. |
 | `window capture needs an app target` | `window: true` was combined with a pinned `rect` or `mode: "screen"` — a region has no window to isolate. |
+| Capture looks right but a click hits another window | The image came from the region path (`source=region`), which shows whatever is on top. For an app target use window capture and check its `occluded=` note; `focus_window` before clicking. |
 | `… is not shareable (closed, minimized, or on another Space)` | `focus_window` first, then capture; window capture cannot reach a minimized window or another Space. |
 | Stop hotkey does nothing | Reopen the app (a build from before the feature has no hotkey), check `hotkey` isn't `"off"` in the config, and see the media-key caveat under [Stop hotkey](#stop-hotkey). |
 

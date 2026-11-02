@@ -17,6 +17,7 @@ package colist
 #include <string.h>
 
 typedef struct { int pid; char *title; int x, y, w, h; int onscreen; } ColistWin;
+typedef struct { int id; char *owner; char *title; int layer; int x, y, w, h; } ColistStack;
 
 static int colist_scan(ColistWin **out) {
   CFArrayRef arr = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID);
@@ -104,6 +105,66 @@ static void colist_free(ColistWin *recs, int n) {
   for (int i = 0; i < n; i++) free(recs[i].title);
   free(recs);
 }
+
+static char *colist_copy_string(CFTypeRef s) {
+  if (s == NULL || CFGetTypeID(s) != CFStringGetTypeID()) return strdup("");
+  char buf[8192];
+  if (CFStringGetCString((CFStringRef)s, buf, (CFIndex)sizeof(buf), kCFStringEncodingUTF8)) return strdup(buf);
+  return strdup("");
+}
+
+// colist_stack lists ON-SCREEN windows in the order CoreGraphics returns them,
+// which the SDK documents as front to back for kCGWindowListOptionOnScreenOnly.
+// No filtering, no reordering: the caller needs the true stacking order and each
+// window's number (the same CGWindowID ScreenCaptureKit reports).
+static int colist_stack(ColistStack **out) {
+  *out = NULL;
+  CFArrayRef arr = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+  if (arr == NULL) return -1;
+  CFIndex n = CFArrayGetCount(arr);
+  ColistStack *recs = (ColistStack *)calloc((size_t)(n > 0 ? n : 1), sizeof(ColistStack));
+  if (recs == NULL) { CFRelease(arr); return -1; }
+  int count = 0;
+  for (CFIndex i = 0; i < n; i++) {
+    CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(arr, i);
+    if (d == NULL || CFGetTypeID(d) != CFDictionaryGetTypeID()) continue;
+    CFTypeRef v;
+    double num = 0, layer = 0;
+    if ((v = CFDictionaryGetValue(d, kCGWindowNumber)) != NULL && CFGetTypeID(v) == CFNumberGetTypeID())
+      CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &num);
+    if ((v = CFDictionaryGetValue(d, kCGWindowLayer)) != NULL && CFGetTypeID(v) == CFNumberGetTypeID())
+      CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &layer);
+    CFTypeRef bv = CFDictionaryGetValue(d, kCGWindowBounds);
+    if (bv == NULL || CFGetTypeID(bv) != CFDictionaryGetTypeID()) continue;
+    CFDictionaryRef b = (CFDictionaryRef)bv;
+    double x = 0, y = 0, w = 0, h = 0;
+    if ((v = CFDictionaryGetValue(b, CFSTR("X"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &x);
+    if ((v = CFDictionaryGetValue(b, CFSTR("Y"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &y);
+    if ((v = CFDictionaryGetValue(b, CFSTR("W"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
+    else if ((v = CFDictionaryGetValue(b, CFSTR("Width"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &w);
+    if ((v = CFDictionaryGetValue(b, CFSTR("H"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
+    else if ((v = CFDictionaryGetValue(b, CFSTR("Height"))) != NULL && CFGetTypeID(v) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &h);
+    if (w <= 0 || h <= 0) continue;
+    recs[count].id = (int)num;
+    recs[count].layer = (int)layer;
+    recs[count].owner = colist_copy_string(CFDictionaryGetValue(d, kCGWindowOwnerName));
+    recs[count].title = colist_copy_string(CFDictionaryGetValue(d, kCGWindowName));
+    recs[count].x = (int)x;
+    recs[count].y = (int)y;
+    recs[count].w = (int)w;
+    recs[count].h = (int)h;
+    count++;
+  }
+  CFRelease(arr);
+  *out = recs; // the caller owns the array (returning a count without this is what crashed sck)
+  return count;
+}
+
+static void colist_stack_free(ColistStack *recs, int n) {
+  if (recs == NULL) return;
+  for (int i = 0; i < n; i++) { free(recs[i].owner); free(recs[i].title); }
+  free(recs);
+}
 */
 import "C"
 
@@ -136,5 +197,34 @@ func List() ([]window.CGWin, error) {
 		}
 	}
 	C.colist_free(recs, n) // freed after Go has copied every field (no defer needed)
+	return out, nil
+}
+
+// Stack returns the on-screen windows in CGWindowList order — documented front
+// to back — unfiltered and unreordered, menu-bar-layer windows included because
+// those really do cover. Occlusion reporting needs the genuine order plus each
+// window's number, which is the same CGWindowID ScreenCaptureKit reports as its
+// window id; List deliberately filters and reorders, so it cannot answer
+// "what is on top of the window I just captured".
+func Stack() ([]window.StackWin, error) {
+	var recs *C.ColistStack
+	n := C.colist_stack(&recs)
+	if n < 0 {
+		return nil, errors.New("colist: CGWindowListCopyWindowInfo(on-screen) failed")
+	}
+	if recs == nil {
+		return nil, errors.New("colist: window stack came back without an array")
+	}
+	out := make([]window.StackWin, 0, int(n))
+	for _, r := range unsafe.Slice(recs, int(n)) {
+		out = append(out, window.StackWin{
+			ID:    int(r.id),
+			Owner: C.GoString(r.owner),
+			Title: C.GoString(r.title),
+			Layer: int(r.layer),
+			Rect:  geom.Rect{X: int(r.x), Y: int(r.y), W: int(r.w), H: int(r.h)},
+		})
+	}
+	C.colist_stack_free(recs, C.int(n))
 	return out, nil
 }

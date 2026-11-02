@@ -76,6 +76,37 @@ func TestMatch_minimizedStillMatches(t *testing.T) {
 	}
 }
 
+func TestMatch_literalFallbackForStoredTitle(t *testing.T) {
+	// The live case that made the app's own selection unusable: the picker stored
+	// the full title, whose "(EXT)" is a capture group as a regex.
+	stored := "Enroll.Prod.W365.Cloud.D - König, Christian (EXT)"
+	list := []Candidate{
+		{ID: 7, App: "Windows App", Title: "Login", OnScreen: true},
+		{ID: 8, App: "Windows App", Title: stored, OnScreen: true},
+	}
+	got, err := Match(list, "Windows App", stored)
+	if err != nil {
+		t.Fatalf("stored title must still select its window: %v", err)
+	}
+	if got.ID != 8 {
+		t.Fatalf("got %+v, want id 8", got)
+	}
+}
+
+func TestMatch_regexWinsOverLiteral(t *testing.T) {
+	list := []Candidate{
+		{ID: 1, App: "Windows App", Title: "Session (1) - literal twin", OnScreen: true},
+		{ID: 2, App: "Windows App", Title: "Session 1 - regex hit", OnScreen: true},
+	}
+	got, err := Match(list, "Windows App", `Session (1)`)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("got id %d, want the regex match 2", got.ID)
+	}
+}
+
 func TestMatch_badTitleRegex(t *testing.T) {
 	_, err := Match(cands(), "Windows App", "Session (")
 	if err == nil || !strings.Contains(err.Error(), "invalid title regex") {

@@ -18,8 +18,8 @@ type Rect struct {
 // resolution: the model reads on-screen text from the image itself, so the
 // image's pixels are its reading budget. Set a width only to cap payload size.
 type CaptureCfg struct {
-	MaxWidth int  `json:"max_width"` // 0 or negative = native resolution
-	Window   bool `json:"window"`    // app targets: capture the window alone (ScreenCaptureKit), not the screen region behind it
+	MaxWidth int   `json:"max_width"`        // 0 or negative = native resolution
+	Window   *bool `json:"window,omitempty"` // nil (default) = auto: an app target is captured as that window alone; false = always the region grab
 }
 
 type InputCfg struct {
@@ -69,14 +69,12 @@ func Defaults() *Config {
 	}
 }
 
-// WindowCapture decides whether an app target is captured window-only: the
-// per-call override wins, then capture.window in the config. The default is
-// false — the region grab stays the default, so nothing changes for a target
-// that has not asked for window capture.
-func (c *Config) WindowCapture(override *bool) bool {
-	if override != nil {
-		return *override
-	}
+// WindowPreference returns the configured window-capture preference: nil means
+// "auto" (capture by target kind — an app target is captured as that window
+// alone), otherwise the explicit true/false from capture.window. Per-call
+// overrides and the target-kind decision live in tools.wantsWindow, which is
+// where the kind is known.
+func (c *Config) WindowPreference() *bool {
 	return c.Capture.Window
 }
 

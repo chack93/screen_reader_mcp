@@ -69,9 +69,10 @@ func sameNames(a, b []string) bool {
 	return true
 }
 
-// TestCapture_windowOnNonAppTarget: window capture is opt-in, and when it is
-// asked for on a target that is not an app window it fails loudly instead of
-// quietly returning the region grab the caller was trying to avoid.
+// TestCapture_windowOnNonAppTarget: capture picks its path by target kind (app →
+// that window alone, rect/screen → the region as seen), and asking for a window
+// explicitly on a target that has none fails loudly instead of quietly returning
+// the region grab the caller was trying to avoid.
 func TestCapture_windowOnNonAppTarget(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cs := connectClient(t)
@@ -104,6 +105,59 @@ func TestCapture_windowOnNonAppTarget(t *testing.T) {
 	}
 	if got := call(map[string]any{"window": true}); !strings.Contains(got, "needs an app target") {
 		t.Fatalf("screen mode: %q", got)
+	}
+}
+
+// TestCapture_autoPathByTargetKind pins the default per target kind: an app
+// target is captured as that window alone (never the region behind it), while a
+// pinned rect or a whole screen is captured as it appears on screen, overlaps
+// included. The chosen path is read from the source= marker rather than from
+// success/failure, so the assertion holds whether or not this machine grants
+// ScreenCaptureKit or Screen Recording at all.
+func TestCapture_autoPathByTargetKind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	ctx := context.Background()
+
+	text := func() string {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "capture", Arguments: map[string]any{}})
+		if err != nil {
+			t.Fatalf("capture call: %v", err)
+		}
+		var out string
+		for _, c := range res.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				out += tc.Text
+			}
+		}
+		return out
+	}
+	save := func(mut func(*config.Config)) {
+		t.Helper()
+		cfg := config.Defaults()
+		mut(cfg)
+		if err := config.Save(config.DefaultPath(), cfg); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+	}
+
+	save(func(cfg *config.Config) { cfg.Mode, cfg.App = "app", "Some App" })
+	if got := text(); strings.Contains(got, "source=region") {
+		t.Fatalf("app target captured the region behind the window: %q", got)
+	}
+
+	save(func(cfg *config.Config) {
+		cfg.Mode, cfg.App = "rect", ""
+		cfg.Rect = config.Rect{X: 0, Y: 0, W: 10, H: 10}
+	})
+	if got := text(); strings.Contains(got, "source=window") {
+		t.Fatalf("pinned rect used the window path: %q", got)
+	}
+
+	save(func(cfg *config.Config) { cfg.Mode, cfg.App, cfg.Rect = "screen", "", config.Rect{} })
+	if got := text(); strings.Contains(got, "source=window") {
+		t.Fatalf("screen target used the window path: %q", got)
 	}
 }
 

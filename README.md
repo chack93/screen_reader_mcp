@@ -47,7 +47,7 @@ Press **F9** (default, rebindable) from any app to stop the MCP server instantly
 
 ## Capture just the window
 
-`capture` grabs a screen region by default, so a window floating over your Remote Desktop session ends up in the image. Pass `window: true` (or set `"capture": { "window": true }`) and the window server renders **only** the target window: overlapping windows are gone and the window does not have to be frontmost. macOS 14+, opt-in, same Screen Recording grant — see [Capturing one window](docs/reference.md#capturing-one-window).
+Point the server at a **window** and it renders **that window only** — the window server draws it, so anything floating on top is gone and it does not have to be frontmost. Point it at a drawn **rectangle** or a whole **display** and you get the screen exactly **as seen**, overlapping windows included; that is what those targets mean. An app-window capture that cannot be rendered is an error, never a silent downgrade to the region grab, and every result says which path produced the image (`source=window` / `source=region`, plus an `occluded=` note in window mode). Needs macOS 14+ for window capture, same Screen Recording grant — see [What each target captures](docs/reference.md#what-each-target-captures).
 
 > **Warning:** this server drives the **real cursor** on your desktop. Keep the target pinned to the Remote Desktop window and use `dry_run` where in doubt — see [Safety](docs/reference.md#safety).
 

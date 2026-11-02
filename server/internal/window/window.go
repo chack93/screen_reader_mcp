@@ -41,6 +41,53 @@ func appleQuote(s string) string {
 	return strings.ReplaceAll(s, `"`, `""`)
 }
 
+// titleFilter selects which window an app/title target means. title is a regex
+// (documented semantics); an empty title selects the app's first window.
+type titleFilter struct {
+	raw string
+	re  *regexp.Regexp
+}
+
+func newTitleFilter(title string) (titleFilter, error) {
+	if title == "" {
+		return titleFilter{}, nil
+	}
+	re, err := regexp.Compile(title)
+	if err != nil {
+		return titleFilter{}, fmt.Errorf("invalid title regex %q: %w", title, err)
+	}
+	return titleFilter{raw: title, re: re}, nil
+}
+
+// matchRegex is the documented filter; matchLiteral is the fallback pass. They
+// are exposed separately so selectTitle can give the regex the whole list first.
+func (f titleFilter) matchRegex(title string) bool {
+	return f.raw == "" || f.re.MatchString(title)
+}
+
+// matchLiteral treats the filter as plain text, which is what the app's picker
+// means when it stores a real window title: titles are full of regex
+// punctuation, so the stored "Enroll… - König, Christian (EXT)" compiles as a
+// pattern requiring "Christian EXT" and could never find the window it names.
+func (f titleFilter) matchLiteral(title string) bool {
+	return f.raw == "" || strings.Contains(title, f.raw)
+}
+
+// selectTitle returns the 0-based index of the selected title, or -1. The regex
+// always gets the first pass over the complete list, so a genuine pattern wins
+// over the fallback; the literal pass runs only when the regex matched nothing,
+// which keeps every working regex target behaving exactly as before.
+func (f titleFilter) selectTitle(titles []string) int {
+	for _, match := range []func(string) bool{f.matchRegex, f.matchLiteral} {
+		for i, t := range titles {
+			if match(t) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
 // splitWindowLine parses "<first>\t<title...>\t<x>\t<y>\t<w>\t<h>". The title may
 // itself contain tabs; it is everything between the first field and the final four
 // geometry fields, rejoined. ok is false if there are <6 fields or any geometry
@@ -93,12 +140,13 @@ func Resolve(app, title string) (geom.Rect, error) {
 	if err != nil {
 		return geom.Rect{}, fmt.Errorf("resolve %q: %w", app, err)
 	}
-	re, err := regexp.Compile(title)
+	f, err := newTitleFilter(title)
 	if err != nil {
-		return geom.Rect{}, fmt.Errorf("invalid title regex %q: %w", title, err)
+		return geom.Rect{}, err
 	}
-	lines := strings.Split(raw, "\n")
-	for _, line := range lines {
+	var titles []string
+	var rects []geom.Rect
+	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -107,10 +155,11 @@ func Resolve(app, title string) (geom.Rect, error) {
 		if !okk {
 			continue
 		}
-		if title != "" && !re.MatchString(winTitle) {
-			continue
-		}
-		return geom.Rect{X: x, Y: y, W: w, H: h}, nil
+		titles = append(titles, winTitle)
+		rects = append(rects, geom.Rect{X: x, Y: y, W: w, H: h})
+	}
+	if i := f.selectTitle(titles); i >= 0 {
+		return rects[i], nil
 	}
 	return geom.Rect{}, fmt.Errorf("no window for app %q (title %q)", app, title)
 }
@@ -122,11 +171,12 @@ func resolveIndex(app, title string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	re, err := regexp.Compile(title)
+	f, err := newTitleFilter(title)
 	if err != nil {
-		return 0, fmt.Errorf("invalid title regex %q: %w", title, err)
+		return 0, err
 	}
-	for i, line := range strings.Split(raw, "\n") {
+	var titles []string
+	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -135,9 +185,9 @@ func resolveIndex(app, title string) (int, error) {
 		if !okk {
 			continue
 		}
-		if title != "" && !re.MatchString(winTitle) {
-			continue
-		}
+		titles = append(titles, winTitle)
+	}
+	if i := f.selectTitle(titles); i >= 0 {
 		return i + 1, nil
 	}
 	return 0, fmt.Errorf("no window for app %q (title %q)", app, title)
