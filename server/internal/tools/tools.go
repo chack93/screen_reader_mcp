@@ -47,7 +47,7 @@ type targetSpec struct {
 	CameraID string    // kindCamera
 }
 
-// classifyTarget picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app).
+// classifyTarget picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app/camera).
 func classifyTarget(cfg *config.Config, app, title string, rect *geom.Rect) (targetSpec, error) {
 	if rect != nil {
 		return targetSpec{Kind: kindRect, Rect: *rect}, nil

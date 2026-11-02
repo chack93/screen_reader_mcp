@@ -156,19 +156,22 @@ void sr_cam_free_list(SRCam *recs, int n) {
 // sr_cam_find resolves a device by uniqueID. -[AVCaptureDevice initWithUniqueID:]
 // is iOS-only (it exists in NO macOS SDK header), and discoverySession +
 // defaultDeviceWithDeviceType: are the documented macOS lookup paths, so an
-// id lookup must scan the discovery session. Apple's docs: uniqueIDs compare
-// case-insensitively.
+// id lookup must scan the discovery session. The compare is case-SENSITIVE —
+// like deviceWithUniqueID:, cameraLine (Go), and the app's picker (Swift).
 static AVCaptureDevice *sr_cam_find(NSString *uniqueID) {
   for (AVCaptureDevice *d in [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:sr_cam_types()
                                                                      mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionUnspecified].devices) {
-    if ([d.uniqueID caseInsensitiveCompare:uniqueID] == NSOrderedSame) return d;
+    if ([d.uniqueID isEqualToString:uniqueID]) return d;
   }
   return nil;
 }
 
 // sr_cam_start resolves the device (empty id = system default), starts the
-// session, and returns the handle. +[AVCaptureDevice defaultDeviceWithMediaType:]
-// is unavailable on macOS, so the default comes from defaultDeviceWithDeviceType:.
+// session, and returns the handle. The default comes from
+// defaultDeviceWithDeviceType: (macOS 10.15+, the current API and the only
+// one that can express the device-type set sr_cam_types gates on); the
+// legacy media-type-only +[AVCaptureDevice defaultDeviceWithMediaType:] is
+// superseded — do not use it.
 // (The device-id parameter must NOT be named `id`: that shadows the ObjC `id`
 // type for the whole scope and breaks the (id) cast in the videoSettings
 // dictionary literal below.)
@@ -312,7 +315,7 @@ func armIdle() {
 	idle = time.AfterFunc(idleTTL, func() {
 		mu.Lock()
 		defer mu.Unlock()
-		if active != nil {
+		if active != nil && expired(lastUsed, time.Now(), idleTTL) {
 			C.sr_cam_stop(active)
 			active = nil
 			activeID = ""
@@ -354,6 +357,7 @@ func Capture(id string) (*image.RGBA, error) {
 			err := takeCamErr(firstErr)
 			C.sr_cam_stop(h)
 			active = nil
+			activeID = ""
 			return nil, fmt.Errorf("camera: %s", err)
 		}
 		if dbuf != nil {
@@ -361,7 +365,6 @@ func Capture(id string) (*image.RGBA, error) {
 		}
 		time.Sleep(settle)
 	}
-	armIdle()
 	var buf *C.uchar
 	var cw, ch, cbpr C.int
 	var ferr *C.char
@@ -371,5 +374,6 @@ func Capture(id string) (*image.RGBA, error) {
 	}
 	defer C.free(unsafe.Pointer(buf))
 	lastUsed = time.Now()
+	armIdle() // AFTER the stamp: the timer must not run ahead by the frame-fetch duration
 	return bgraToRGBA(C.GoBytes(unsafe.Pointer(buf), C.int(int(cbpr)*int(ch))), int(cw), int(ch), int(cbpr))
 }

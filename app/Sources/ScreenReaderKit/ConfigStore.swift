@@ -11,7 +11,7 @@ public enum ConfigStore {
     public struct Target: Equatable {
         public var app: String
         public var title: String
-        public var mode: String // "app" | "rect" | "screen"
+        public var mode: String // "app" | "rect" | "screen" | "camera"
         public var x: Int
         public var y: Int
         public var w: Int

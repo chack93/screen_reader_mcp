@@ -54,7 +54,7 @@ NOTARY_ISSUER_ID=xxxxxxxx-xxxx-… ./release.sh
 
 ## Permissions
 
-macOS TCC requires grants for the app that owns the server process (the menu-bar app, the terminal running opencode, or opencode.app). In **System Settings → Privacy & Security**, grant all three:
+macOS TCC requires grants for the app that owns the server process (the menu-bar app, the terminal running opencode, or opencode.app). In **System Settings → Privacy & Security**, grant these:
 
 | Permission | Enables | Symptom when missing |
 | --- | --- | --- |
@@ -111,7 +111,9 @@ it through the same `capture` tool — one settled still frame per call
 (`source=camera` in the text line, no `bounds`). While camera mode is set,
 pointer tools (click/move/scroll/drag) are rejected; typing still reaches
 the focused app. Device selection is the user's: `set_target` cannot switch
-to or away from camera.
+**into** camera mode (`mode: "camera"` is rejected) nor change the selected
+device; it **can** switch away (`mode: "app" | "rect" | "screen"`), which
+also re-enables the pointer tools.
 
 ## Capturing one window
 

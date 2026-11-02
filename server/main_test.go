@@ -107,7 +107,7 @@ func TestCapture_windowOnNonAppTarget(t *testing.T) {
 	}
 }
 
-// TestCapture_cameraTargetWindowFalse: camera targets reject window:true
+// TestCapture_cameraTargetWindowTrue: camera targets reject window:true
 // through the generic non-app-target path, and never reach the camera.
 func TestCapture_cameraTargetWindowTrue(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -222,7 +222,9 @@ func TestClick_cameraModeBlocked(t *testing.T) {
 		if !res.IsError {
 			t.Fatalf("%s ran in camera mode: %v", name, res.Content)
 		}
-		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "target is a camera") {
+		// Per-tool prefix: the guard must name the tool it blocks, so a
+		// copy-pasted wrong tool name at one call site fails here.
+		if text := res.Content[0].(*mcp.TextContent).Text; !strings.HasPrefix(text, name+" is disabled") {
 			t.Fatalf("%s: %q", name, text)
 		}
 	}
