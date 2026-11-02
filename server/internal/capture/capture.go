@@ -11,6 +11,7 @@ import (
 	"github.com/go-vgo/robotgo"
 	"golang.org/x/image/draw"
 
+	"screenreader/internal/camera"
 	"screenreader/internal/geom"
 	"screenreader/internal/sck"
 	"screenreader/internal/window"
@@ -66,4 +67,31 @@ func CaptureWindow(c window.Candidate, maxWidth int) (*Result, error) {
 	}
 	b := img.Bounds()
 	return &Result{PNG: buf.Bytes(), Bounds: c.Rect, ImgW: b.Dx(), ImgH: b.Dy()}, nil
+}
+
+// cameraFrame is the seam unit tests swap out; production grabs one frame
+// through internal/camera (cached session, bounded waits).
+var cameraFrame = camera.Capture
+
+// CaptureCamera grabs one settled camera frame (id "" = system default) and
+// encodes it like the other capture paths. Bounds is the zero Rect: a camera
+// image has no screen region to map coordinates onto. Errors pass through
+// untouched — internal/camera's are already actionable.
+func CaptureCamera(id string, maxWidth int) (*Result, error) {
+	img, err := cameraFrame(id)
+	if err != nil {
+		return nil, err
+	}
+	b := img.Bounds()
+	w, h := geom.ScaleDown(b.Dx(), b.Dy(), maxWidth)
+	if w != b.Dx() || h != b.Dy() {
+		dst := image.NewRGBA(image.Rect(0, 0, w, h))
+		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
+		img = dst
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("encode png: %w", err)
+	}
+	return &Result{PNG: buf.Bytes(), ImgW: w, ImgH: h}, nil
 }
