@@ -330,6 +330,15 @@ func armIdle() {
 func Capture(id string) (*image.RGBA, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	// armIdle rewrites the shared `idle` var, so it must run holding mu; being
+	// deferred after the unlock defer, LIFO runs it while the lock is still
+	// held. Deferred (not inline) so EVERY exit that leaves a cached session
+	// armed the teardown — above all a cold start that caches the session and
+	// then fails the first-frame wait, which used to return with the LED on
+	// and no timer. Exits that end with active == nil arm a no-op: the
+	// callback guards on active != nil and expired(). Running at return also
+	// means the timer is never armed before the fresh lastUsed stamp below.
+	defer armIdle()
 	if st := AuthStatus(); st == "denied" || st == "restricted" {
 		return nil, fmt.Errorf("camera access denied (status: %s) — grant: System Settings → Privacy & Security → Camera (restart Screen Reader MCP after granting)", st)
 	}
@@ -338,6 +347,7 @@ func Capture(id string) (*image.RGBA, error) {
 		if active != nil {
 			C.sr_cam_stop(active)
 			active = nil
+			activeID = "" // full reset, like the cold-start failure path below
 		}
 		cid := C.CString(id)
 		defer C.free(unsafe.Pointer(cid))
@@ -373,7 +383,6 @@ func Capture(id string) (*image.RGBA, error) {
 		return nil, fmt.Errorf("camera: %s", takeCamErr(ferr))
 	}
 	defer C.free(unsafe.Pointer(buf))
-	lastUsed = time.Now()
-	armIdle() // AFTER the stamp: the timer must not run ahead by the frame-fetch duration
+	lastUsed = time.Now() // deferred armIdle() fires at return: idleTTL after THIS stamp
 	return bgraToRGBA(C.GoBytes(unsafe.Pointer(buf), C.int(int(cbpr)*int(ch))), int(cw), int(ch), int(cbpr))
 }
