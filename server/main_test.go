@@ -188,3 +188,45 @@ func TestAccessGuard_blocksStaleSession(t *testing.T) {
 		t.Fatalf("unexpected error text: %q", text.Text)
 	}
 }
+
+// TestClick_cameraModeBlocked: the target has no screen coordinates while it
+// is a camera, so pointer tools fail loudly; keyboard tools keep working
+// (they drive the focused app, not the target).
+func TestClick_cameraModeBlocked(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Mode = "camera"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, name := range []string{"click", "move", "scroll", "drag"} {
+		// Arguments must validate against each tool's own schema (the SDK rejects
+		// unknown properties before the handler runs, so a dry_run on move — which
+		// has no such param — would test schema validation, not the guard).
+		args := map[string]any{"x": 5, "y": 5}
+		if name == "click" {
+			args["dry_run"] = true
+		}
+		if name == "scroll" {
+			args = map[string]any{"dx": 1, "dy": 1}
+		}
+		if name == "drag" {
+			args = map[string]any{"x1": 1, "y1": 1, "x2": 2, "y2": 2, "dry_run": true}
+		}
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s ran in camera mode: %v", name, res.Content)
+		}
+		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "target is a camera") {
+			t.Fatalf("%s: %q", name, text)
+		}
+	}
+	// type is NOT blocked (it needs Accessibility to run; assert only that it
+	// is not refused by the camera guard) — dry path not available, so skip
+	// actual execution and rely on the registration tests instead.
+}

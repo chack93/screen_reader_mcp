@@ -237,6 +237,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "click", &mcp.Tool{Name: "click", Description: "Click at screen-absolute (x,y)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a clickArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("click"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
@@ -266,6 +269,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "move", &mcp.Tool{Name: "move", Description: "Move the cursor to (x,y)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a xyArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("move"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
@@ -290,6 +296,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "scroll", &mcp.Tool{Name: "scroll", Description: "Scroll by (dx,dy) at (x,y) if given."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a scrollArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("scroll"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
@@ -319,6 +328,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "drag", &mcp.Tool{Name: "drag", Description: "Drag from (x1,y1) to (x2,y2)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a dragArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("drag"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x1, y1, x2, y2 := a.X1, a.Y1, a.X2, a.Y2
 			if a.Coords == "image" && a.Rect != nil {
 				x1, y1 = mapImageXY(a.X1, a.Y1, a.ImgW, a.ImgH, *a.Rect)
@@ -595,6 +607,17 @@ func cameraLabel(cfg *config.Config) string {
 		return cfg.Camera.Name
 	}
 	return "system default"
+}
+
+// cameraGuard blocks pointer tools while the target is a camera: there are no
+// screen coordinates to aim at, and an agent dragging the cursor while the
+// user believes the session is camera-only is exactly the "silently wrong"
+// this repo refuses. Keyboard tools stay allowed (focused app, not target).
+func cameraGuard(tool string) error {
+	if loadCfg().Mode == "camera" {
+		return fmt.Errorf("%s is disabled: the target is a camera — set a window/rect/screen target in Screen Reader settings", tool)
+	}
+	return nil
 }
 
 // windowCaptureLine is doctor's ScreenCaptureKit probe. Both capture paths ride
