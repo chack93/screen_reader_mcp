@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-vgo/robotgo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"screenreader/internal/camera"
 	"screenreader/internal/capture"
 	"screenreader/internal/colist"
 	"screenreader/internal/config"
@@ -464,6 +466,11 @@ func RegisterTarget(server *mcp.Server, access string) {
 	add(server, access, "window_info", &mcp.Tool{Name: "window_info", Description: "Report the resolved target (app, title, mode, bounds)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
+			if cfg.Mode == "camera" {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+					Text: fmt.Sprintf("mode=camera camera=%q capture=camera", cameraLabel(cfg)),
+				}}}, nil, nil
+			}
 			r, err := resolveRect(cfg, "", "", nil)
 			if err != nil {
 				return errResult(err), nil, nil
@@ -545,7 +552,12 @@ func RegisterTarget(server *mcp.Server, access string) {
 			out += permLine("accessibility", perms.Accessibility(), "System Settings → Privacy & Security → Accessibility")
 			out += permLine("automation", perms.Automation(), "System Settings → Privacy & Security → Automation → allow your terminal to control System Events")
 			out += windowCaptureLine(cfg)
-			if r, err := resolveRect(cfg, "", "", nil); err != nil {
+			if cfg.Mode == "camera" {
+				out += cameraLine(cfg)
+			}
+			if cfg.Mode == "camera" {
+				out += fmt.Sprintf("target: camera %q\n", cameraLabel(cfg))
+			} else if r, err := resolveRect(cfg, "", "", nil); err != nil {
 				out += "target: ERROR " + err.Error() + " (try list_windows / set_target)\n"
 			} else {
 				out += fmt.Sprintf("target: ok %+v\n", r)
@@ -636,6 +648,33 @@ func windowCaptureLine(cfg *config.Config) string {
 			"\n    grant: System Settings → Privacy & Security → Screen Recording (toggle off/on, then restart the app); region capture is unaffected\n"
 	}
 	return fmt.Sprintf("  window_capture: ok (%d windows enumerable) default=%s\n", len(wins), def)
+}
+
+// cameraLine is doctor's camera probe: TCC status + configured-device
+// presence, WITHOUT starting a session (no camera light during a check-up).
+func cameraLine(cfg *config.Config) string {
+	if st := camera.AuthStatus(); st != "authorized" {
+		return "  camera: MISSING — access not granted (status: " + st +
+			")\n    grant: System Settings → Privacy & Security → Camera (restart Screen Reader MCP after granting)\n"
+	}
+	if cfg.Camera.ID != "" {
+		devs, err := camera.List()
+		if err != nil {
+			return "  camera: ERROR " + err.Error() + "\n"
+		}
+		for _, d := range devs {
+			if d.ID == cfg.Camera.ID {
+				return fmt.Sprintf("  camera: ok (%q, auth=authorized)\n", cameraLabel(cfg))
+			}
+		}
+		var names []string
+		for _, d := range devs {
+			names = append(names, d.Name)
+		}
+		return fmt.Sprintf("  camera: MISSING — configured camera %q is not connected (available: %s)\n",
+			cfg.Camera.Name, strings.Join(names, ", "))
+	}
+	return fmt.Sprintf("  camera: ok (%q, auth=authorized, system default)\n", cameraLabel(cfg))
 }
 
 // displayBounds returns the screen-absolute bounds of display i (0 = main).

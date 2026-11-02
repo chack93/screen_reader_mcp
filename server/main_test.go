@@ -230,3 +230,26 @@ func TestClick_cameraModeBlocked(t *testing.T) {
 	// is not refused by the camera guard) — dry path not available, so skip
 	// actual execution and rely on the registration tests instead.
 }
+
+// TestWindowInfo_cameraMode: camera mode has no bounds, so window_info must
+// report the device instead of erroring out of resolveRect.
+func TestWindowInfo_cameraMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Mode, cfg.Camera.Name = "camera", "Cam X"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "window_info", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("window_info errored in camera mode: %v", res.Content)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, `mode=camera`) || !strings.Contains(text, `camera="Cam X"`) {
+		t.Fatalf("text %q must report the camera", text)
+	}
+}
