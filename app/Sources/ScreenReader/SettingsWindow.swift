@@ -593,7 +593,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         o.present()
     }
 
-    private func saveTarget(_ t: ConfigStore.Target) {
+    private func saveTarget(_ input: ConfigStore.Target) {
+        // Camera keys belong to camera mode only (ConfigStore.applyTarget's
+        // contract): every non-camera write drops the loaded camera fields,
+        // so neither a mode switch away from Camera nor any later save can
+        // re-persist a stale "camera" key. This is the single choke point all
+        // target saves pass through; camera-mode saves pass through untouched.
+        var t = input
+        if t.mode != "camera" {
+            t.cameraID = ""
+            t.cameraName = ""
+        }
         saveConfig { ConfigStore.applyTarget(t, to: $0) }
     }
 
