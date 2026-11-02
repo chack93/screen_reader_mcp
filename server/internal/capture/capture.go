@@ -1,4 +1,5 @@
-// Package capture screenshots a screen region via robotgo and encodes PNG.
+// Package capture screenshots a screen region (robotgo) or one window on its
+// own (ScreenCaptureKit) and encodes PNG.
 package capture
 
 import (
@@ -11,6 +12,8 @@ import (
 	"golang.org/x/image/draw"
 
 	"screenreader/internal/geom"
+	"screenreader/internal/sck"
+	"screenreader/internal/window"
 )
 
 type Result struct {
@@ -22,6 +25,8 @@ type Result struct {
 
 // CaptureRegion captures the screen region r, optionally downscaling so the width
 // is at most maxWidth (aspect preserved). Returns the PNG bytes and geometry.
+// Anything drawn on top of the region comes back in the image: this is a grab of
+// the display, not of a window.
 func CaptureRegion(r geom.Rect, maxWidth int) (*Result, error) {
 	img, err := robotgo.Capture(r.X, r.Y, r.W, r.H) // *image.RGBA
 	if err != nil {
@@ -40,4 +45,25 @@ func CaptureRegion(r geom.Rect, maxWidth int) (*Result, error) {
 		return nil, fmt.Errorf("encode png: %w", err)
 	}
 	return &Result{PNG: buf.Bytes(), Bounds: r, ImgW: w, ImgH: h}, nil
+}
+
+// CaptureWindow renders the single window c (from an app/title target resolved
+// against ScreenCaptureKit) with no other window in frame: the window server
+// draws just that window, so overlapping windows are excluded and it does not
+// have to be frontmost. maxWidth behaves as in CaptureRegion — SCK scales, so
+// there is no second downscale here.
+//
+// Bounds is the window's own frame, which is what image coordinates map onto
+// (SCK is asked to leave the shadow out, so the image covers the frame exactly).
+func CaptureWindow(c window.Candidate, maxWidth int) (*Result, error) {
+	img, err := sck.Capture(c, maxWidth)
+	if err != nil {
+		return nil, fmt.Errorf("window capture: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("encode png: %w", err)
+	}
+	b := img.Bounds()
+	return &Result{PNG: buf.Bytes(), Bounds: c.Rect, ImgW: b.Dx(), ImgH: b.Dy()}, nil
 }

@@ -45,6 +45,10 @@ Grant the three macOS permissions (Screen Recording, Accessibility, Automation) 
 
 Press **F9** (default, rebindable) from any app to stop the MCP server instantly — see [Stop hotkey](docs/reference.md#stop-hotkey).
 
+## Capture just the window
+
+`capture` grabs a screen region by default, so a window floating over your Remote Desktop session ends up in the image. Pass `window: true` (or set `"capture": { "window": true }`) and the window server renders **only** the target window: overlapping windows are gone and the window does not have to be frontmost. macOS 14+, opt-in, same Screen Recording grant — see [Capturing one window](docs/reference.md#capturing-one-window).
+
 > **Warning:** this server drives the **real cursor** on your desktop. Keep the target pinned to the Remote Desktop window and use `dry_run` where in doubt — see [Safety](docs/reference.md#safety).
 
 ## Documentation

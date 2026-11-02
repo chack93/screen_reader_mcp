@@ -31,6 +31,62 @@ func TestDefaults(t *testing.T) {
 	if c.Capture.MaxWidth != 0 {
 		t.Fatalf("capture.max_width default = %d, want 0 (native resolution)", c.Capture.MaxWidth)
 	}
+	// Region capture stays the default: window capture changes what the image
+	// contains, so nothing may flip it without the user asking.
+	if c.Capture.Window {
+		t.Fatal("capture.window default = true, want false (region capture)")
+	}
+}
+
+func TestWindowCapture_precedence(t *testing.T) {
+	yes, no := true, false
+	off := Defaults()
+	on := Defaults()
+	on.Capture.Window = true
+
+	if off.WindowCapture(nil) || off.WindowCapture(&no) {
+		t.Fatal("region capture expected when config is off and no override says true")
+	}
+	if !off.WindowCapture(&yes) {
+		t.Fatal("per-call window:true must enable window capture over the config default")
+	}
+	if !on.WindowCapture(nil) {
+		t.Fatal("config capture.window must apply when no override is given")
+	}
+	if on.WindowCapture(&no) {
+		t.Fatal("per-call window:false must override capture.window=true")
+	}
+}
+
+func TestLoad_captureWindow(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(p, []byte(`{"capture":{"max_width":1200,"window":true}}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if c.Capture.MaxWidth != 1200 || !c.Capture.Window {
+		t.Fatalf("capture config not loaded: %+v", c.Capture)
+	}
+}
+
+func TestSaveLoad_captureWindowRoundTrip(t *testing.T) {
+	// set_target rewrites the whole file, so the capture block must survive it.
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	c := Defaults()
+	c.Capture.Window = true
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.Capture.Window {
+		t.Fatalf("capture.window lost in round-trip: %+v", got.Capture)
+	}
 }
 
 func TestLoad_missingFile_returnsDefaults(t *testing.T) {

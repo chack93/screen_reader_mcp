@@ -16,13 +16,36 @@ import (
 	"screenreader/internal/geom"
 	"screenreader/internal/input"
 	"screenreader/internal/perms"
+	"screenreader/internal/sck"
 	"screenreader/internal/window"
 )
 
-// resolveRect picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app).
-func resolveRect(cfg *config.Config, app, title string, rect *geom.Rect) (geom.Rect, error) {
+// targetKind is the branch target resolution takes. "app" targets name a window
+// (so they can be captured window-only); the others are screen regions, which no
+// window filter can narrow.
+type targetKind string
+
+const (
+	kindRect   targetKind = "rect"
+	kindScreen targetKind = "screen"
+	kindApp    targetKind = "app"
+)
+
+// targetSpec is a resolved target before any expensive lookup: the kind plus
+// what that kind needs. Classifying first means window capture never pays for
+// the AppleScript window walk, and region capture never pays for SCK.
+type targetSpec struct {
+	Kind   targetKind
+	Rect   geom.Rect // kindRect
+	Screen int       // kindScreen
+	App    string    // kindApp
+	Title  string    // kindApp
+}
+
+// classifyTarget picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app).
+func classifyTarget(cfg *config.Config, app, title string, rect *geom.Rect) (targetSpec, error) {
 	if rect != nil {
-		return *rect, nil
+		return targetSpec{Kind: kindRect, Rect: *rect}, nil
 	}
 	// Per-call app or title → app target (app falls back to cfg.App).
 	if app != "" || title != "" {
@@ -31,25 +54,48 @@ func resolveRect(cfg *config.Config, app, title string, rect *geom.Rect) (geom.R
 			a = cfg.App
 		}
 		if a == "" {
-			return geom.Rect{}, fmt.Errorf("app/title override given but no app target configured (set_target app=...)")
+			return targetSpec{}, fmt.Errorf("app/title override given but no app target configured (set_target app=...)")
 		}
 		t := title
 		if t == "" {
 			t = cfg.Title
 		}
-		return window.Resolve(a, t)
+		return targetSpec{Kind: kindApp, App: a, Title: t}, nil
 	}
 	// No per-call app/title: honor the configured mode.
 	if cfg.Mode == "rect" && cfg.Rect.W > 0 && cfg.Rect.H > 0 {
-		return geom.Rect(cfg.Rect), nil
+		return targetSpec{Kind: kindRect, Rect: geom.Rect(cfg.Rect)}, nil
 	}
 	if cfg.Mode == "screen" {
-		return displayBounds(cfg.Screen)
+		return targetSpec{Kind: kindScreen, Screen: cfg.Screen}, nil
 	}
 	if cfg.App != "" {
-		return window.Resolve(cfg.App, cfg.Title)
+		return targetSpec{Kind: kindApp, App: cfg.App, Title: cfg.Title}, nil
 	}
-	return geom.Rect{}, fmt.Errorf("no target configured (set app, a pinned rect, or a screen)")
+	return targetSpec{}, fmt.Errorf("no target configured (set app, a pinned rect, or a screen)")
+}
+
+// rect turns the spec into screen-absolute bounds: the pinned rect, the display
+// bounds, or an AppleScript lookup for an app window.
+func (t targetSpec) rect() (geom.Rect, error) {
+	switch t.Kind {
+	case kindRect:
+		return t.Rect, nil
+	case kindScreen:
+		return displayBounds(t.Screen)
+	default:
+		return window.Resolve(t.App, t.Title)
+	}
+}
+
+// resolveRect picks the target region (see classifyTarget) and resolves it to
+// screen-absolute bounds.
+func resolveRect(cfg *config.Config, app, title string, rect *geom.Rect) (geom.Rect, error) {
+	spec, err := classifyTarget(cfg, app, title, rect)
+	if err != nil {
+		return geom.Rect{}, err
+	}
+	return spec.rect()
 }
 
 func errResult(err error) *mcp.CallToolResult {
@@ -70,12 +116,13 @@ func RegisterReading(server *mcp.Server, access string) {
 		Title    string     `json:"title,omitempty" jsonschema:"Window title regex override"`
 		Rect     *geom.Rect `json:"rect,omitempty" jsonschema:"Pinned screen-absolute region {x,y,w,h}"`
 		MaxWidth int        `json:"max_width,omitempty" jsonschema:"Downscale to this width in px (0 = config default, negative = native resolution)"`
+		Window   *bool      `json:"window,omitempty" jsonschema:"Capture only the app window so windows on top of it are excluded (default: config capture.window); false = grab the screen region as before"`
 	}
 
-	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable."},
+	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. With window: true an app target is captured as that window alone: overlapping windows are excluded and it does not have to be frontmost."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a regionArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
-			r, err := resolveRect(cfg, a.App, a.Title, a.Rect)
+			spec, err := classifyTarget(cfg, a.App, a.Title, a.Rect)
 			if err != nil {
 				return errResult(err), nil, nil
 			}
@@ -83,15 +130,64 @@ func RegisterReading(server *mcp.Server, access string) {
 			if mw == 0 {
 				mw = cfg.Capture.MaxWidth
 			}
+
+			wantWindow := cfg.WindowCapture(a.Window)
+			if wantWindow && spec.Kind != kindApp {
+				if a.Window != nil {
+					// Asked for one window, but the target is a pinned region or a whole
+					// screen: say so instead of quietly returning the old
+					// everything-in-the-rect image.
+					return errResult(fmt.Errorf("window capture needs an app target (this target is %s) — drop window:true or set_target app=...", spec.Kind)), nil, nil
+				}
+				// Only the config default asked for it: a target with no window to
+				// isolate keeps the region path it has always used.
+				wantWindow = false
+			}
+			if wantWindow {
+				res, id, err := captureWindow(spec, mw)
+				if err != nil {
+					return errResult(err), nil, nil
+				}
+				b := res.Bounds
+				return &mcp.CallToolResult{Content: []mcp.Content{
+					&mcp.ImageContent{Data: res.PNG, MIMEType: "image/png"},
+					&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d source=window id=%d", b.X, b.Y, b.W, b.H, res.ImgW, res.ImgH, id)},
+				}}, nil, nil
+			}
+
+			r, err := spec.rect()
+			if err != nil {
+				return errResult(err), nil, nil
+			}
 			res, err := capture.CaptureRegion(r, mw)
 			if err != nil {
 				return errResult(err), nil, nil
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{
 				&mcp.ImageContent{Data: res.PNG, MIMEType: "image/png"},
-				&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d", r.X, r.Y, r.W, r.H, res.ImgW, res.ImgH)},
+				&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d source=region", r.X, r.Y, r.W, r.H, res.ImgW, res.ImgH)},
 			}}, nil, nil
 		})
+}
+
+// captureWindow resolves an app target to one ScreenCaptureKit window and
+// renders just that window. Errors name the way out, because window capture is
+// opt-in: falling back silently would hand back an image with other windows in
+// it while the caller believes it is clean.
+func captureWindow(spec targetSpec, maxWidth int) (*capture.Result, uint32, error) {
+	cands, err := sck.Windows()
+	if err != nil {
+		return nil, 0, fmt.Errorf("window capture: %v (this needs the Screen Recording grant for the hosting app — run doctor; window:false uses the region grab, which works without it)", err)
+	}
+	cand, err := window.Match(cands, spec.App, spec.Title)
+	if err != nil {
+		return nil, 0, err
+	}
+	res, err := capture.CaptureWindow(cand, maxWidth)
+	if err != nil {
+		return nil, 0, err
+	}
+	return res, cand.ID, nil
 }
 
 // orDefault returns d when s is empty.
@@ -338,7 +434,7 @@ func RegisterTarget(server *mcp.Server, access string) {
 				return errResult(err), nil, nil
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
-				Text: fmt.Sprintf("mode=%s screen=%d app=%q title=%q bounds=%+v", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, r),
+				Text: fmt.Sprintf("mode=%s screen=%d app=%q title=%q bounds=%+v capture=%s", cfg.Mode, cfg.Screen, cfg.App, cfg.Title, r, captureMode(cfg)),
 			}}}, nil, nil
 		})
 
@@ -413,6 +509,7 @@ func RegisterTarget(server *mcp.Server, access string) {
 			out += permLine("screen_recording", perms.ScreenRecording(), "System Settings → Privacy & Security → Screen Recording (restart the app after granting)")
 			out += permLine("accessibility", perms.Accessibility(), "System Settings → Privacy & Security → Accessibility")
 			out += permLine("automation", perms.Automation(), "System Settings → Privacy & Security → Automation → allow your terminal to control System Events")
+			out += windowCaptureLine(cfg)
 			if r, err := resolveRect(cfg, "", "", nil); err != nil {
 				out += "target: ERROR " + err.Error() + " (try list_windows / set_target)\n"
 			} else {
@@ -458,6 +555,32 @@ func permLine(name string, ok bool, hint string) string {
 		status = "MISSING — grant: " + hint
 	}
 	return "  " + name + ": " + status + "\n"
+}
+
+// captureMode names how app targets are captured by default.
+func captureMode(cfg *config.Config) string {
+	if cfg.Capture.Window {
+		return "window"
+	}
+	return "region"
+}
+
+// windowCaptureLine is doctor's ScreenCaptureKit probe. Both capture paths ride
+// the same Screen Recording grant, but a process can be granted for the legacy
+// display grab and still be refused here (-3801), which is exactly what makes
+// window capture fail — so ask it directly instead of inferring it from the
+// screen_recording line above.
+func windowCaptureLine(cfg *config.Config) string {
+	def := captureMode(cfg)
+	if !sck.Available() {
+		return fmt.Sprintf("  window_capture: unavailable (macOS %s — needs macOS 14+; region capture works) default=%s\n", sck.OSVersion(), def)
+	}
+	wins, err := sck.Windows()
+	if err != nil {
+		return "  window_capture: MISSING — " + err.Error() +
+			"\n    grant: System Settings → Privacy & Security → Screen Recording (toggle off/on, then restart the app); region capture is unaffected\n"
+	}
+	return fmt.Sprintf("  window_capture: ok (%d windows enumerable) default=%s\n", len(wins), def)
 }
 
 // displayBounds returns the screen-absolute bounds of display i (0 = main).

@@ -9,6 +9,7 @@ Setup details, configuration, tools, and operations. See the [README](../README.
 - [Release builds (signed + notarized)](#release-builds-signed--notarized)
 - [Permissions](#permissions)
 - [Configure the target](#configure-the-target)
+- [Capturing one window](#capturing-one-window)
 - [HTTP mode (manual)](#http-mode-manual)
 - [App details](#app-details)
 - [Stop hotkey](#stop-hotkey)
@@ -63,6 +64,8 @@ macOS TCC requires grants for the app that owns the server process (the menu-bar
 
 After granting any permission, **quit and restart the hosting app** (terminal/opencode) so it picks up the grant. The menu-bar app avoids this churn: grants are cert-anchored to the **ScreenReader Dev** signing identity and survive rebuilds (see [App details](#app-details)).
 
+Window-only capture ([Capturing one window](#capturing-one-window)) uses the same Screen Recording grant, but the grant is not interchangeable in practice: a process that captures fine through the legacy display API can still be refused by ScreenCaptureKit with `-3801 The user declined TCCs`. `doctor` probes it separately on its `window_capture:` line, and region capture keeps working when that line is missing.
+
 ## Configure the target
 
 Config lives at `~/.config/screenreader/config.json` and is **re-read on every action** — live edits apply without restarting the server. Per-call args always override config.
@@ -80,17 +83,34 @@ Pick one target mode (or mix — per-call args always win):
   "mode": "app",
   "screen": 0,
   "rect": { "x": 0, "y": 0, "w": 0, "h": 0 },
-  "capture": { "max_width": 0 },
+  "capture": { "max_width": 0, "window": false },
   "input": { "delay_ms": 120 }
 }
 ```
 
 `capture.max_width: 0` (the default) captures at **native resolution**: the image is the model's only reading channel, so only set a width if payloads get too big for your model. A per-call `max_width` overrides it (`-1` forces native even when the config pins a width).
 
+`capture.window: true` makes app targets capture **that window only**, with no other window in frame (see [Capturing one window](#capturing-one-window)). It defaults to `false`, so `capture` keeps grabbing the screen region as before.
+
 `hotkey` is the menu-bar app's global stop key (see [Stop hotkey](#stop-hotkey)); `"off"` disables it. The server never reads it — the field is in its config struct only so a `set_target` rewrite cannot drop it.
 
 2. **Call the `set_target` tool** — sets and persists the default target (app/title, a pinned rect with `mode: "rect"`, or a whole display with `mode: "screen"` + `screen: <index>`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
 3. Use `list_windows` to discover the exact app name / title regex / bounds to pin, or `list_screens` to see the display indexes (0 = main) for a screen target.
+
+## Capturing one window
+
+By default `capture` grabs the **screen region** the target resolves to, so any window floating on top comes back in the image — annoying when the Remote Desktop window is half covered by a browser. `window: true` (or `"capture": { "window": true }` in the config) captures the **window itself** instead: the window server draws just that window, so overlapping windows are excluded and the target does not have to be frontmost or even focused.
+
+```json
+{ "app": "Windows App", "title": "", "mode": "app", "capture": { "window": true } }
+```
+
+or per call: `capture { "window": true }`. Reported `bounds` become the window's own frame, so `coords: "image"` clicks map exactly as they do for a region capture; the output line says which path produced the image (`source=window id=29410` / `source=region`).
+
+- **Needs macOS 14+** and the Screen Recording grant; `doctor`'s `window_capture:` line reports whether this process can actually use it (a legacy grant that captures fine can still be refused here with `-3801` — toggle Screen Recording off/on for the hosting app and restart it).
+- **Opt-in and loud**: a failed window capture is an error, never a silent fallback to the region grab, because a "clean" image with another window in it is worse than a clear failure. `window: false` forces the old behavior for one call.
+- Only app targets have a window: `window: true` with a pinned `rect` or `mode: "screen"` is refused with a message rather than quietly capturing the region.
+- Limits: a minimized window, or one on another Space, may not be shareable (bring it forward with `focus_window` first); content backed by a secure surface can come back black.
 
 ## opencode config (stdio)
 
@@ -178,7 +198,7 @@ without hunting for the menu bar icon. The default is **F9**.
 
 | Tool | Purpose | Key args |
 | --- | --- | --- |
-| `capture` | Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image with your own vision. | `app`, `title`, `rect`, `max_width` |
+| `capture` | Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image with your own vision. `window: true` captures the app window alone — overlapping windows excluded, no need to focus it. | `app`, `title`, `rect`, `max_width`, `window` |
 | `click` | Click at screen-absolute (x,y). | `x`, `y`, `button`, `clicks`, `dry_run`, `coords`, `rect`, `img_w`, `img_h` |
 | `move` | Move the cursor to (x,y). | `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
 | `scroll` | Scroll by (dx,dy) at (x,y) if given. | `dx`, `dy`, `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
@@ -197,7 +217,7 @@ without hunting for the menu bar icon. The default is **F9**.
 ## Coordinate model
 
 - **Screen-absolute by default**: top-left origin, Y down. All input coordinates (click, move, drag) are in these coordinates.
-- `capture` returns `bounds={x,y,w,h}` (screen region) **and** `image=WxH` (pixel size, may be Retina-doubled). Map image→screen proportionally: `screenX = bounds.x + (px / img_w) * bounds.w` (same for Y).
+- `capture` returns `bounds={x,y,w,h}` (screen region) **and** `image=WxH` (pixel size, may be Retina-doubled). Map image→screen proportionally: `screenX = bounds.x + (px / img_w) * bounds.w` (same for Y). In `window: true` mode `bounds` is the window's own frame (shadow excluded), so the same mapping holds.
 - Easiest path for a vision model: read the pixel position straight off the image you were given and pass `coords: "image"` + `rect` + `img_w`/`img_h` to `click`/`move`/`drag`/`scroll` — the server does the mapping for you. Coordinates are validated against the union of all active displays (the virtual screen) and rejected if out of range, so secondary-display coordinates (often negative or beyond the main display's size) are accepted.
 
 ## Reading the screen (vision workflow)
@@ -229,6 +249,10 @@ This server drives the **real cursor** on your desktop — it is not sandboxed f
 | cgo build failure (`fatal error: 'objc.h' file not found` etc.) | Install Xcode Command Line Tools: `xcode-select --install`. |
 | "no target configured" | Call `set_target` (e.g. `list_windows` first to find the app/title), or edit `~/.config/screenreader/config.json`. |
 | Small text misread in a capture | Re-capture with `max_width: -1` (native pixels) and a tighter `rect`/app target, so the region fills more of the image. |
+| Other windows appear inside a capture | Capture the window instead of the region: `capture { "window": true }` or `capture.window: true` (needs macOS 14+). |
+| `window capture: … (-3801) The user declined TCCs` | ScreenCaptureKit is refusing this process even though region capture works: toggle **Screen Recording** off/on for the hosting app and restart it. `doctor`'s `window_capture:` line confirms it; `window: false` restores the region grab meanwhile. |
+| `window capture needs an app target` | `window: true` was combined with a pinned `rect` or `mode: "screen"` — a region has no window to isolate. |
+| `… is not shareable (closed, minimized, or on another Space)` | `focus_window` first, then capture; window capture cannot reach a minimized window or another Space. |
 | Stop hotkey does nothing | Reopen the app (a build from before the feature has no hotkey), check `hotkey` isn't `"off"` in the config, and see the media-key caveat under [Stop hotkey](#stop-hotkey). |
 
 Remember: after granting any permission, **restart the app that owns the server process** — TCC grants are read at process start.

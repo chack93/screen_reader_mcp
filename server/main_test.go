@@ -69,6 +69,44 @@ func sameNames(a, b []string) bool {
 	return true
 }
 
+// TestCapture_windowOnNonAppTarget: window capture is opt-in, and when it is
+// asked for on a target that is not an app window it fails loudly instead of
+// quietly returning the region grab the caller was trying to avoid.
+func TestCapture_windowOnNonAppTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	ctx := context.Background()
+
+	call := func(args map[string]any) string {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "capture", Arguments: args})
+		if err != nil {
+			t.Fatalf("capture call: %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("capture accepted window:true on a non-app target: %v", res.Content)
+		}
+		text, ok := res.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("unexpected content type: %T", res.Content[0])
+		}
+		return text.Text
+	}
+
+	if got := call(map[string]any{"rect": map[string]any{"x": 0, "y": 0, "w": 10, "h": 10}, "window": true}); !strings.Contains(got, "needs an app target") {
+		t.Fatalf("pinned rect: %q", got)
+	}
+
+	cfg := config.Defaults()
+	cfg.Mode = "screen"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	if got := call(map[string]any{"window": true}); !strings.Contains(got, "needs an app target") {
+		t.Fatalf("screen mode: %q", got)
+	}
+}
+
 func TestToolSurface_fullAccess(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no config file → default full access
 	got := listToolNames(t)

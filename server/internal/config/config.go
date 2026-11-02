@@ -18,7 +18,8 @@ type Rect struct {
 // resolution: the model reads on-screen text from the image itself, so the
 // image's pixels are its reading budget. Set a width only to cap payload size.
 type CaptureCfg struct {
-	MaxWidth int `json:"max_width"` // 0 or negative = native resolution
+	MaxWidth int  `json:"max_width"` // 0 or negative = native resolution
+	Window   bool `json:"window"`    // app targets: capture the window alone (ScreenCaptureKit), not the screen region behind it
 }
 
 type InputCfg struct {
@@ -66,6 +67,17 @@ func Defaults() *Config {
 		Input: InputCfg{DelayMs: 120},
 		HTTP:  HTTPCfg{Addr: "127.0.0.1:18427"},
 	}
+}
+
+// WindowCapture decides whether an app target is captured window-only: the
+// per-call override wins, then capture.window in the config. The default is
+// false — the region grab stays the default, so nothing changes for a target
+// that has not asked for window capture.
+func (c *Config) WindowCapture(override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	return c.Capture.Window
 }
 
 // Load reads the config at path. A missing file returns Defaults (no error).
