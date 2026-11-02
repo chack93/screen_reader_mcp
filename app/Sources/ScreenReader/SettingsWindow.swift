@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ScreenReaderKit
 
@@ -10,13 +11,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// so the currently assigned key would never reach the recorder).
     private let hotkeySuspended: (Bool) -> Void
     private var permStatus: [TCCPermission: NSTextField] = [:]
+    private var permRows: [TCCPermission: NSStackView] = [:]
     private var grantButton: NSButton!
     private var segmented: NSSegmentedControl!
     private var pickerRow: NSStackView!
     private var rectRow: NSStackView!
     private var screenRow: NSStackView!
+    private var cameraRow: NSStackView!
     private var picker: NSPopUpButton!
     private var screenPicker: NSPopUpButton!
+    private var cameraPicker: NSPopUpButton!
     private var rectLabel: NSTextField!
     private var serverLabel: NSTextField!
     private var rootStack: NSStackView!
@@ -30,6 +34,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var lastHotkeyKey = ""
     private var lastModeKey = ""
     private var lastScreensFingerprint = ""
+    private var lastCamerasFingerprint = ""
     private var timer: Timer?
 
     init(server: ServerProcess, hotkeyChanged: @escaping (String) -> Void,
@@ -90,6 +95,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             row.addArrangedSubview(btn)
             row.widthAnchor.constraint(equalToConstant: 420).isActive = true
             permStatus[p] = status
+            permRows[p] = row
             perms.addArrangedSubview(row)
         }
         grantButton = NSButton(title: "Grant access", target: self, action: #selector(grantAll))
@@ -133,7 +139,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // sections' fixed row widths.
         target.widthAnchor.constraint(equalToConstant: 420).isActive = true
         target.addArrangedSubview(sectionTitle("Target"))
-        segmented = NSSegmentedControl(labels: ["App window", "Rectangle", "Screen"],
+        segmented = NSSegmentedControl(labels: ["App window", "Rectangle", "Screen", "Camera"],
                                        trackingMode: .selectOne, target: self,
                                        action: #selector(modeChanged))
         target.addArrangedSubview(segmented)
@@ -163,9 +169,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         screenRow.addArrangedSubview(NSButton(title: "Refresh", target: self,
                                               action: #selector(refreshScreenPicker)))
 
+        cameraRow = stack(.horizontal)
+        cameraPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+        cameraPicker.target = self
+        cameraPicker.action = #selector(cameraPickerChanged)
+        cameraPicker.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        cameraRow.addArrangedSubview(cameraPicker)
+        cameraRow.addArrangedSubview(NSButton(title: "Refresh", target: self,
+                                              action: #selector(refreshCameraPicker)))
+
         target.addArrangedSubview(pickerRow)
         target.addArrangedSubview(rectRow)
         target.addArrangedSubview(screenRow)
+        target.addArrangedSubview(cameraRow)
         root.addArrangedSubview(target)
 
         // --- Agent access ---
@@ -241,7 +257,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         for p in TCCPermission.allCases {
             permStatus[p]?.stringValue = p.isGranted ? "✓ granted" : "✗ missing"
         }
-        grantButton.isHidden = !TCCPermission.allCases.contains { !$0.isGranted }
 
         let json = (try? ConfigStore.load()) ?? [:]
         let (addr, token) = ConfigStore.httpConfig(from: json)
@@ -257,6 +272,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         snippetView.string = Snippet.opencodeEntry(addr: addr, token: token)
 
         let t = ConfigStore.target(from: json)
+        // camMode gates the Camera permission row/button: that permission only
+        // matters in camera mode, so a missing Camera grant must neither show
+        // the row nor arm the Grant-access button while another mode is active.
+        let camMode = t.mode == "camera"
+        grantButton.isHidden = !TCCPermission.allCases.contains { !$0.isGranted && ($0 != .camera || camMode) }
         rectLabel.stringValue = (t.mode == "rect" && t.w > 0)
             ? "(\(t.x), \(t.y), \(t.w), \(t.h))" : ""
 
@@ -264,10 +284,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // user mid-selection in Rectangle mode isn't snapped back every 2 s.
         // Derive the key from the stored mode directly (modeChanged persists
         // the mode immediately, so an unsaved/zero rect never fights the UI).
-        let key = t.mode == "rect" ? "rect" : (t.mode == "screen" ? "screen" : "app")
+        let key = t.mode == "rect" ? "rect" : (t.mode == "screen" ? "screen" : (t.mode == "camera" ? "camera" : "app"))
         if key != lastModeKey {
             lastModeKey = key
-            segmented.selectedSegment = key == "rect" ? 1 : (key == "screen" ? 2 : 0)
+            segmented.selectedSegment = key == "rect" ? 1 : (key == "screen" ? 2 : (key == "camera" ? 3 : 0))
             updateModeRows()
         }
 
@@ -291,6 +311,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
 
         syncScreenPicker()
+        for p in TCCPermission.allCases {
+            permRows[p]?.isHidden = (p == .camera && !camMode)
+        }
+        syncCameraPicker()
         fitToContent()
     }
 
@@ -312,6 +336,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         pickerRow.isHidden = segmented.selectedSegment != 0
         rectRow.isHidden = segmented.selectedSegment != 1
         screenRow.isHidden = segmented.selectedSegment != 2
+        cameraRow.isHidden = segmented.selectedSegment != 3
     }
 
     /// Keeps the screen dropdown in sync: rebuilds the items when the display
@@ -383,11 +408,75 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         saveTarget(t)
     }
 
+    /// Device types: .external/.continuityCamera exist on macOS 14+ only;
+    /// ExternalUnknown is the 13-floor spelling (deprecated there in 14, hence
+    /// the availability split — mirrors internal/camera's sr_cam_types()).
+    private func cameraTypes() -> [AVCaptureDevice.DeviceType] {
+        if #available(macOS 14.0, *) {
+            return [.builtInWideAngleCamera, .external, .continuityCamera]
+        }
+        return [.builtInWideAngleCamera, .externalUnknown]
+    }
+
+    /// Enumeration in-app via AVFoundation (like syncScreenPicker uses
+    /// NSScreen.screens) so the picker works while the server is stopped.
+    private func syncCameraPicker() {
+        let devs = AVCaptureDevice.DiscoverySession(deviceTypes: cameraTypes(),
+                                                    mediaType: .video, position: .unspecified).devices
+        let fp = devs.map(\.uniqueID).joined(separator: ",")
+        if fp != lastCamerasFingerprint {
+            lastCamerasFingerprint = fp
+            cameraPicker.removeAllItems()
+            cameraPicker.addItem(withTitle: "(System default camera)")
+            for d in devs {
+                cameraPicker.addItem(withTitle: d.localizedName)
+                cameraPicker.lastItem?.representedObject = CamEntry(id: d.uniqueID, name: d.localizedName)
+            }
+        }
+        let t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
+        if t.cameraID.isEmpty {
+            if cameraPicker.indexOfSelectedItem != 0 { cameraPicker.selectItem(at: 0) }
+            return
+        }
+        for (i, item) in cameraPicker.itemArray.enumerated() {
+            if (item.representedObject as? CamEntry)?.id == t.cameraID {
+                if cameraPicker.indexOfSelectedItem != i { cameraPicker.selectItem(at: i) }
+                return
+            }
+        }
+        // Stored device is gone: say so, keep the config untouched (loud,
+        // never silently retargeted) — mirrors the Go error contract. The
+        // title guard stops the 2 s tick from appending the placeholder again.
+        let title = "(not connected: \(t.cameraName.isEmpty ? t.cameraID : t.cameraName))"
+        if cameraPicker.lastItem?.title != title {
+            cameraPicker.addItem(withTitle: title)
+        }
+        cameraPicker.selectItem(at: cameraPicker.numberOfItems - 1)
+    }
+
+    @objc private func refreshCameraPicker() {
+        lastCamerasFingerprint = ""
+        syncCameraPicker()
+    }
+
+    @objc private func cameraPickerChanged() {
+        guard let item = cameraPicker.selectedItem else { return }
+        var t = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:])
+        t.mode = "camera"
+        if let c = item.representedObject as? CamEntry {
+            t.cameraID = c.id; t.cameraName = c.name
+        } else {
+            t.cameraID = ""; t.cameraName = "" // "(System default camera)" or placeholder
+        }
+        saveTarget(t)
+    }
+
     // MARK: - Actions
 
     @objc private func requestPerm(_ sender: NSButton) { TCCPermission.allCases[sender.tag].request() }
     @objc private func grantAll() {
-        for p in TCCPermission.allCases where !p.isGranted { p.request() }
+        let camMode = ConfigStore.target(from: (try? ConfigStore.load()) ?? [:]).mode == "camera"
+        for p in TCCPermission.allCases where !p.isGranted && (p != .camera || camMode) { p.request() }
     }
 
     @objc private func modeChanged() {
@@ -395,6 +484,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         switch segmented.selectedSegment {
         case 1: key = "rect"
         case 2: key = "screen"
+        case 3: key = "camera"
         default: key = "app"
         }
         guard key != lastModeKey else { return }
@@ -416,6 +506,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
            let w = picker.selectedItem?.representedObject as? WindowEntry {
             t.app = w.app
             t.title = w.title
+        }
+        // Same T17 pattern for the camera leg: switching TO Camera mode adopts
+        // the device the picker is currently showing. If selectedItem carries
+        // no CamEntry — "(System default camera)" or a placeholder — leave the
+        // stored t.cameraID/t.cameraName as loaded.
+        if key == "camera",
+           let c = cameraPicker.selectedItem?.representedObject as? CamEntry {
+            t.cameraID = c.id
+            t.cameraName = c.name
         }
         saveTarget(t)
     }
@@ -494,7 +593,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         o.present()
     }
 
-    private func saveTarget(_ t: ConfigStore.Target) {
+    private func saveTarget(_ input: ConfigStore.Target) {
+        // Camera keys belong to camera mode only (ConfigStore.applyTarget's
+        // contract): every non-camera write drops the loaded camera fields,
+        // so neither a mode switch away from Camera nor any later save can
+        // re-persist a stale "camera" key. This is the single choke point all
+        // target saves pass through; camera-mode saves pass through untouched.
+        var t = input
+        if t.mode != "camera" {
+            t.cameraID = ""
+            t.cameraName = ""
+        }
         saveConfig { ConfigStore.applyTarget(t, to: $0) }
     }
 
@@ -528,3 +637,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                                        forType: .string)
     }
 }
+
+/// Picker item for the camera dropdown: AVCaptureDevice.uniqueID + display
+/// name. Items without one (the "(System default camera)" entry, the
+/// "(not connected: …)" placeholder) mean "no stored device".
+private struct CamEntry { let id: String; let name: String }

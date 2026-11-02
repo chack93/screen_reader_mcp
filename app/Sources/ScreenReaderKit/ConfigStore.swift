@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 /// Reads/writes ~/.config/screenreader/config.json.
-/// Mutates only app/title/mode/screen/rect/http/access/hotkey; preserves every other key.
+/// Mutates only app/title/mode/screen/rect/camera/http/access/hotkey; preserves every other key.
 public enum ConfigStore {
     public static let defaultPath: String =
         NSHomeDirectory() + "/.config/screenreader/config.json"
@@ -11,17 +11,21 @@ public enum ConfigStore {
     public struct Target: Equatable {
         public var app: String
         public var title: String
-        public var mode: String // "app" | "rect" | "screen"
+        public var mode: String // "app" | "rect" | "screen" | "camera"
         public var x: Int
         public var y: Int
         public var w: Int
         public var h: Int
         public var screen: Int // display index for mode "screen" (0 = main)
+        public var cameraID: String   // AVCaptureDevice.uniqueID; "" = system default
+        public var cameraName: String // display-only
         public init(app: String, title: String, mode: String, x: Int, y: Int, w: Int, h: Int,
-                    screen: Int = 0) {
+                    screen: Int = 0,
+                    cameraID: String = "", cameraName: String = "") {
             self.app = app; self.title = title; self.mode = mode
             self.x = x; self.y = y; self.w = w; self.h = h
             self.screen = screen
+            self.cameraID = cameraID; self.cameraName = cameraName
         }
     }
 
@@ -64,6 +68,11 @@ public enum ConfigStore {
         out["mode"] = t.mode
         out["screen"] = t.screen
         out["rect"] = ["x": t.x, "y": t.y, "w": t.w, "h": t.h]
+        if !t.cameraID.isEmpty || !t.cameraName.isEmpty {
+            out["camera"] = ["id": t.cameraID, "name": t.cameraName]
+        } else {
+            out.removeValue(forKey: "camera") // camera keys belong to camera mode only
+        }
         return out
     }
 
@@ -74,7 +83,9 @@ public enum ConfigStore {
                       title: json["title"] as? String ?? "",
                       mode: json["mode"] as? String ?? "app",
                       x: i("x"), y: i("y"), w: i("w"), h: i("h"),
-                      screen: json["screen"] as? Int ?? 0)
+                      screen: json["screen"] as? Int ?? 0,
+                      cameraID: (json["camera"] as? [String: Any])?["id"] as? String ?? "",
+                      cameraName: (json["camera"] as? [String: Any])?["name"] as? String ?? "")
     }
 
     /// Agent access mode: "full" (default) | "read_only".

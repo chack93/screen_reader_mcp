@@ -255,6 +255,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let t = ConfigStore.target(from: json)
         if t.mode == "screen" {
             targetLine.title = "Target: screen \(t.screen + 1)"
+        } else if t.mode == "camera" {
+            targetLine.title = "Target: camera " + (t.cameraName.isEmpty ? "(system default)" : t.cameraName)
         } else if t.mode == "rect", t.w > 0 {
             targetLine.title = "Target: rectangle (\(t.x), \(t.y), \(t.w), \(t.h))"
         } else if !t.app.isEmpty {
@@ -263,6 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             targetLine.title = "Target: not set"
         }
         for (p, i) in zip(TCCPermission.allCases, permLines) {
+            i.isHidden = (p == .camera && t.mode != "camera") // fixed structure, hidden rows (autoStopItem precedent)
             i.title = "\(p.rawValue): " + (permCache[p].map { $0 ? "✓" : "✗" } ?? "…")
         }
     }

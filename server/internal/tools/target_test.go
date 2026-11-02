@@ -92,6 +92,57 @@ func TestClassifyTarget(t *testing.T) {
 	})
 }
 
+func TestClassifyTargetCamera(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Mode, cfg.Camera.ID, cfg.Camera.Name = "camera", "AA11", "Cam X"
+	cfg.App, cfg.Title = "Stale App", "Old" // stale app must NOT retarget camera mode
+
+	t.Run("camera mode wins over stored app", func(t *testing.T) {
+		got, err := classifyTarget(cfg, "", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Kind != kindCamera || got.CameraID != "AA11" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+	t.Run("per-call app override still wins", func(t *testing.T) {
+		got, err := classifyTarget(cfg, "Windows App", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Kind != kindApp || got.App != "Windows App" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+	t.Run("explicit rect still wins", func(t *testing.T) {
+		got, err := classifyTarget(cfg, "", "", &geom.Rect{X: 1, Y: 2, W: 3, H: 4})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Kind != kindRect {
+			t.Fatalf("got %+v", got)
+		}
+	})
+	t.Run("camera target has no screen bounds", func(t *testing.T) {
+		spec, _ := classifyTarget(cfg, "", "", nil)
+		if _, err := spec.rect(); err == nil || !strings.Contains(err.Error(), "no screen bounds") {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
+func TestCameraLabel(t *testing.T) {
+	cfg := config.Defaults()
+	if got := cameraLabel(cfg); got != "system default" {
+		t.Fatalf("empty name: %q", got)
+	}
+	cfg.Camera.Name = "Cam X"
+	if got := cameraLabel(cfg); got != "Cam X" {
+		t.Fatalf("named: %q", got)
+	}
+}
+
 func TestWantsWindow(t *testing.T) {
 	yes, no := true, false
 	auto := config.Defaults()
@@ -160,5 +211,31 @@ func TestCaptureMode(t *testing.T) {
 	}
 	if got := captureMode(&yes, kindScreen); got != "region" {
 		t.Fatalf("true + screen = %q, want region (no window to isolate)", got)
+	}
+}
+
+func TestWantsWindowCamera(t *testing.T) {
+	yes, no := true, false
+	auto := config.Defaults()
+	on := config.Defaults()
+	on.Capture.Window = &yes
+
+	// A camera target has no window to isolate: neither the auto default nor a
+	// config-level capture.window: true may divert it into the window path —
+	// camera capture must keep working when the app pins the preference.
+	if got, err := wantsWindow(auto, kindCamera, nil); err != nil || got {
+		t.Fatalf("auto + camera: got %t (err %v), want no window capture", got, err)
+	}
+	if got, err := wantsWindow(on, kindCamera, nil); err != nil || got {
+		t.Fatalf("capture.window=true + camera: got %t (err %v), want no window capture", got, err)
+	}
+	// An explicit window:true on a camera target fails loudly, in main's
+	// wording shape, and names the camera target.
+	if _, err := wantsWindow(auto, kindCamera, &yes); err == nil ||
+		!strings.Contains(err.Error(), "needs an app target") || !strings.Contains(err.Error(), "camera") {
+		t.Fatalf("window:true + camera: want an error naming the camera target, got %v", err)
+	}
+	if got, err := wantsWindow(auto, kindCamera, &no); err != nil || got {
+		t.Fatalf("window:false + camera: got %t (err %v), want no window capture", got, err)
 	}
 }

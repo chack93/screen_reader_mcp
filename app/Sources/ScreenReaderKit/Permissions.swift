@@ -1,3 +1,4 @@
+import AVFoundation
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -6,12 +7,14 @@ public enum TCCPermission: String, CaseIterable {
     case screenRecording = "Screen Recording"
     case accessibility = "Accessibility"
     case automation = "Automation (System Events)"
+    case camera = "Camera"
 
     public var isGranted: Bool {
         switch self {
         case .screenRecording: return CGPreflightScreenCaptureAccess()
         case .accessibility:   return AXIsProcessTrusted()
         case .automation:      return Self.probeAutomation()
+        case .camera:          return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         }
     }
 
@@ -25,6 +28,8 @@ public enum TCCPermission: String, CaseIterable {
             _ = AXIsProcessTrustedWithOptions(opts)
         case .automation:
             _ = Self.probeAutomation() // running it is what surfaces the prompt
+        case .camera:
+            AVCaptureDevice.requestAccess(for: .video) { _ in } // async prompt; the 2 s refresh re-reads status
         }
     }
 

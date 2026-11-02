@@ -14,5 +14,9 @@
   <key>LSUIElement</key><true/>
   <key>NSAppleEventsUsageDescription</key>
   <string>Screen Reader MCP uses System Events to list and focus windows.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Screen Reader MCP captures a still frame from the camera you choose as the reading target.</string>
+  <key>NSCameraUseContinuityCameraDeviceType</key>
+  <true/>
 </dict>
 </plist>

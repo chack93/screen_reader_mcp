@@ -161,6 +161,29 @@ func TestCapture_autoPathByTargetKind(t *testing.T) {
 	}
 }
 
+// TestCapture_cameraTargetWindowTrue: camera targets reject window:true
+// through the generic non-app-target path, and never reach the camera.
+func TestCapture_cameraTargetWindowTrue(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Mode, cfg.Camera.ID = "camera", "does-not-exist-id"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "capture", Arguments: map[string]any{"window": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("camera target accepted window:true: %v", res.Content)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "needs an app target") || !strings.Contains(text, "camera") {
+		t.Fatalf("text %q must name the camera kind", text)
+	}
+}
+
 func TestToolSurface_fullAccess(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no config file → default full access
 	got := listToolNames(t)
@@ -217,5 +240,72 @@ func TestAccessGuard_blocksStaleSession(t *testing.T) {
 	}
 	if !strings.Contains(text.Text, "disabled") {
 		t.Fatalf("unexpected error text: %q", text.Text)
+	}
+}
+
+// TestClick_cameraModeBlocked: the target has no screen coordinates while it
+// is a camera, so pointer tools fail loudly; keyboard tools keep working
+// (they drive the focused app, not the target).
+func TestClick_cameraModeBlocked(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Mode = "camera"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, name := range []string{"click", "move", "scroll", "drag"} {
+		// Arguments must validate against each tool's own schema (the SDK rejects
+		// unknown properties before the handler runs, so a dry_run on move — which
+		// has no such param — would test schema validation, not the guard).
+		args := map[string]any{"x": 5, "y": 5}
+		if name == "click" {
+			args["dry_run"] = true
+		}
+		if name == "scroll" {
+			args = map[string]any{"dx": 1, "dy": 1}
+		}
+		if name == "drag" {
+			args = map[string]any{"x1": 1, "y1": 1, "x2": 2, "y2": 2, "dry_run": true}
+		}
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s ran in camera mode: %v", name, res.Content)
+		}
+		// Per-tool prefix: the guard must name the tool it blocks, so a
+		// copy-pasted wrong tool name at one call site fails here.
+		if text := res.Content[0].(*mcp.TextContent).Text; !strings.HasPrefix(text, name+" is disabled") {
+			t.Fatalf("%s: %q", name, text)
+		}
+	}
+	// type is NOT blocked (it needs Accessibility to run; assert only that it
+	// is not refused by the camera guard) — dry path not available, so skip
+	// actual execution and rely on the registration tests instead.
+}
+
+// TestWindowInfo_cameraMode: camera mode has no bounds, so window_info must
+// report the device instead of erroring out of resolveRect.
+func TestWindowInfo_cameraMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Mode, cfg.Camera.Name = "camera", "Cam X"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "window_info", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("window_info errored in camera mode: %v", res.Content)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, `mode=camera`) || !strings.Contains(text, `camera="Cam X"`) {
+		t.Fatalf("text %q must report the camera", text)
 	}
 }

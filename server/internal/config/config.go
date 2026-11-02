@@ -26,6 +26,15 @@ type InputCfg struct {
 	DelayMs int `json:"delay_ms"`
 }
 
+// CameraCfg names the camera target's device. App-owned like Hotkey: only the
+// menu-bar app writes it; the field exists so set_target's Save preserves it.
+// ID is AVCaptureDevice.uniqueID (stable across replugs/reboots); empty =
+// system-default video device. Name is display-only.
+type CameraCfg struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type HTTPCfg struct {
 	Addr  string `json:"addr"`  // loopback only, e.g. "127.0.0.1:18427"
 	Token string `json:"token"` // bearer token for /mcp; empty = unauthenticated
@@ -40,7 +49,8 @@ type Config struct {
 	Hotkey  string     `json:"hotkey"`
 	App     string     `json:"app"`
 	Title   string     `json:"title"`
-	Mode    string     `json:"mode"`   // "app" | "rect" | "screen"
+	Mode    string     `json:"mode"`   // "app" | "rect" | "screen" | "camera"
+	Camera  CameraCfg  `json:"camera"` // target device when Mode == "camera"
 	Screen  int        `json:"screen"` // display index for mode "screen" (0 = main)
 	Rect    Rect       `json:"rect"`
 	Capture CaptureCfg `json:"capture"`

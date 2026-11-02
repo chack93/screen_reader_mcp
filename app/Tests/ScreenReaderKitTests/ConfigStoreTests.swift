@@ -149,4 +149,21 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(t.allSatisfy { "0123456789abcdef".contains($0) })
         XCTAssertNotEqual(t, ConfigStore.generateToken())
     }
+
+    func testCameraRoundTrip() {
+        let t = ConfigStore.Target(app: "", title: "", mode: "camera", x: 0, y: 0, w: 0, h: 0,
+                                   cameraID: "AA11", cameraName: "Cam X")
+        let back = ConfigStore.target(from: ConfigStore.applyTarget(t, to: [:]))
+        XCTAssertEqual(back.mode, "camera")
+        XCTAssertEqual(back.cameraID, "AA11")
+        XCTAssertEqual(back.cameraName, "Cam X")
+    }
+
+    func testApplyTarget_removesEmptyCameraAndKeepsForeignKeys() {
+        let json: [String: Any] = ["camera": ["id": "AA11", "name": "Cam X"], "hotkey": "f9"]
+        let out = ConfigStore.applyTarget(
+            ConfigStore.Target(app: "X", title: "", mode: "app", x: 0, y: 0, w: 0, h: 0), to: json)
+        XCTAssertNil(out["camera"], "leaving camera mode must drop the stale device key")
+        XCTAssertEqual(out["hotkey"] as? String, "f9")
+    }
 }

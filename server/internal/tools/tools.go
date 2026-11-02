@@ -11,6 +11,7 @@ import (
 	"github.com/go-vgo/robotgo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"screenreader/internal/camera"
 	"screenreader/internal/capture"
 	"screenreader/internal/colist"
 	"screenreader/internal/config"
@@ -23,27 +24,30 @@ import (
 
 // targetKind is the branch target resolution takes. "app" targets name a window
 // (so they can be captured window-only); the others are screen regions, which no
-// window filter can narrow.
+// window filter can narrow. `camera` is not a screen region either — it is the
+// one target with no bounds at all.
 type targetKind string
 
 const (
 	kindRect   targetKind = "rect"
 	kindScreen targetKind = "screen"
 	kindApp    targetKind = "app"
+	kindCamera targetKind = "camera"
 )
 
 // targetSpec is a resolved target before any expensive lookup: the kind plus
 // what that kind needs. Classifying first means window capture never pays for
 // the AppleScript window walk, and region capture never pays for SCK.
 type targetSpec struct {
-	Kind   targetKind
-	Rect   geom.Rect // kindRect
-	Screen int       // kindScreen
-	App    string    // kindApp
-	Title  string    // kindApp
+	Kind     targetKind
+	Rect     geom.Rect // kindRect
+	Screen   int       // kindScreen
+	App      string    // kindApp
+	Title    string    // kindApp
+	CameraID string    // kindCamera
 }
 
-// classifyTarget picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app).
+// classifyTarget picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app/camera).
 func classifyTarget(cfg *config.Config, app, title string, rect *geom.Rect) (targetSpec, error) {
 	if rect != nil {
 		return targetSpec{Kind: kindRect, Rect: *rect}, nil
@@ -62,6 +66,12 @@ func classifyTarget(cfg *config.Config, app, title string, rect *geom.Rect) (tar
 			t = cfg.Title
 		}
 		return targetSpec{Kind: kindApp, App: a, Title: t}, nil
+	}
+	// Camera mode is the app's choice and outranks a stale stored app: a user
+	// on the camera segment is never silently retargeted. Per-call overrides
+	// above still win (same semantics as rect/screen).
+	if cfg.Mode == "camera" {
+		return targetSpec{Kind: kindCamera, CameraID: cfg.Camera.ID}, nil
 	}
 	// No per-call app/title: honor the configured mode.
 	if cfg.Mode == "rect" && cfg.Rect.W > 0 && cfg.Rect.H > 0 {
@@ -84,6 +94,8 @@ func (t targetSpec) rect() (geom.Rect, error) {
 		return t.Rect, nil
 	case kindScreen:
 		return displayBounds(t.Screen)
+	case kindCamera:
+		return geom.Rect{}, fmt.Errorf("camera target has no screen bounds")
 	default:
 		return window.Resolve(t.App, t.Title)
 	}
@@ -120,7 +132,7 @@ func RegisterReading(server *mcp.Server, access string) {
 		Window   *bool      `json:"window,omitempty" jsonschema:"true = only that app window (overlapping windows excluded); false = the screen region as seen, overlaps included; default is automatic per target kind"`
 	}
 
-	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. An app target is captured as that window alone (overlapping windows excluded, no need to focus it); a pinned rect or whole screen is captured as it appears on screen, overlaps included. window: false forces the region grab for an app target."},
+	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. An app target is captured as that window alone (overlapping windows excluded, no need to focus it); a pinned rect or whole screen is captured as it appears on screen, overlaps included. window: false forces the region grab for an app target. With the target set to camera (Screen Reader settings) capture returns one settled frame from that camera, with no bounds; image coordinates then map to no screen region."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a regionArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
 			spec, err := classifyTarget(cfg, a.App, a.Title, a.Rect)
@@ -146,6 +158,18 @@ func RegisterReading(server *mcp.Server, access string) {
 					&mcp.ImageContent{Data: shot.res.PNG, MIMEType: "image/png"},
 					&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d source=window id=%d%s",
 						b.X, b.Y, b.W, b.H, shot.res.ImgW, shot.res.ImgH, shot.id, shot.occluded)},
+				}}, nil, nil
+			}
+
+			if spec.Kind == kindCamera {
+				res, err := capture.CaptureCamera(spec.CameraID, mw)
+				if err != nil {
+					return errResult(err), nil, nil
+				}
+				// No bounds token: a camera image maps to no screen region.
+				return &mcp.CallToolResult{Content: []mcp.Content{
+					&mcp.ImageContent{Data: res.PNG, MIMEType: "image/png"},
+					&mcp.TextContent{Text: fmt.Sprintf("image=%dx%d source=camera device=%q", res.ImgW, res.ImgH, cameraLabel(cfg))},
 				}}, nil, nil
 			}
 
@@ -280,6 +304,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "click", &mcp.Tool{Name: "click", Description: "Click at screen-absolute (x,y)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a clickArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("click"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
@@ -309,6 +336,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "move", &mcp.Tool{Name: "move", Description: "Move the cursor to (x,y)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a xyArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("move"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
@@ -333,6 +363,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "scroll", &mcp.Tool{Name: "scroll", Description: "Scroll by (dx,dy) at (x,y) if given."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a scrollArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("scroll"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x, y := a.X, a.Y
 			if a.Coords == "image" && a.Rect != nil {
 				x, y = mapImageXY(a.X, a.Y, a.ImgW, a.ImgH, *a.Rect)
@@ -362,6 +395,9 @@ func RegisterInput(server *mcp.Server, access string) {
 	}
 	add(server, access, "drag", &mcp.Tool{Name: "drag", Description: "Drag from (x1,y1) to (x2,y2)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a dragArgs) (*mcp.CallToolResult, any, error) {
+			if e := cameraGuard("drag"); e != nil {
+				return errResult(e), nil, nil
+			}
 			x1, y1, x2, y2 := a.X1, a.Y1, a.X2, a.Y2
 			if a.Coords == "image" && a.Rect != nil {
 				x1, y1 = mapImageXY(a.X1, a.Y1, a.ImgW, a.ImgH, *a.Rect)
@@ -495,6 +531,11 @@ func RegisterTarget(server *mcp.Server, access string) {
 	add(server, access, "window_info", &mcp.Tool{Name: "window_info", Description: "Report the resolved target (app, title, mode, bounds) and how it will be captured."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
+			if cfg.Mode == "camera" {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+					Text: fmt.Sprintf("mode=camera camera=%q capture=camera", cameraLabel(cfg)),
+				}}}, nil, nil
+			}
 			spec, err := classifyTarget(cfg, "", "", nil)
 			if err != nil {
 				return errResult(err), nil, nil
@@ -580,7 +621,12 @@ func RegisterTarget(server *mcp.Server, access string) {
 			out += permLine("accessibility", perms.Accessibility(), "System Settings → Privacy & Security → Accessibility")
 			out += permLine("automation", perms.Automation(), "System Settings → Privacy & Security → Automation → allow your terminal to control System Events")
 			out += windowCaptureLine(cfg)
-			if r, err := resolveRect(cfg, "", "", nil); err != nil {
+			if cfg.Mode == "camera" {
+				out += cameraLine(cfg)
+			}
+			if cfg.Mode == "camera" {
+				out += fmt.Sprintf("target: camera %q\n", cameraLabel(cfg))
+			} else if r, err := resolveRect(cfg, "", "", nil); err != nil {
 				out += "target: ERROR " + err.Error() + " (try list_windows / set_target)\n"
 			} else {
 				out += fmt.Sprintf("target: ok %+v\n", r)
@@ -644,6 +690,26 @@ func captureMode(pref *bool, kind targetKind) string {
 	return "region"
 }
 
+// cameraLabel names the configured camera for reports ("system default" when
+// no device was picked).
+func cameraLabel(cfg *config.Config) string {
+	if cfg.Camera.Name != "" {
+		return cfg.Camera.Name
+	}
+	return "system default"
+}
+
+// cameraGuard blocks pointer tools while the target is a camera: there are no
+// screen coordinates to aim at, and an agent dragging the cursor while the
+// user believes the session is camera-only is exactly the "silently wrong"
+// this repo refuses. Keyboard tools stay allowed (focused app, not target).
+func cameraGuard(tool string) error {
+	if loadCfg().Mode == "camera" {
+		return fmt.Errorf("%s is disabled: the target is a camera — set a window/rect/screen target in Screen Reader settings", tool)
+	}
+	return nil
+}
+
 // windowCaptureLine is doctor's ScreenCaptureKit probe. Both capture paths ride
 // the same Screen Recording grant, but a process can be granted for the legacy
 // display grab and still be refused here (-3801), which is exactly what makes
@@ -660,6 +726,33 @@ func windowCaptureLine(cfg *config.Config) string {
 			"\n    grant: System Settings → Privacy & Security → Screen Recording (toggle off/on, then restart the app); region capture is unaffected\n"
 	}
 	return fmt.Sprintf("  window_capture: ok (%d windows enumerable) default=%s\n", len(wins), def)
+}
+
+// cameraLine is doctor's camera probe: TCC status + configured-device
+// presence, WITHOUT starting a session (no camera light during a check-up).
+func cameraLine(cfg *config.Config) string {
+	if st := camera.AuthStatus(); st != "authorized" {
+		return "  camera: MISSING — access not granted (status: " + st +
+			")\n    grant: System Settings → Privacy & Security → Camera (restart Screen Reader MCP after granting)\n"
+	}
+	if cfg.Camera.ID != "" {
+		devs, err := camera.List()
+		if err != nil {
+			return "  camera: ERROR " + err.Error() + "\n"
+		}
+		for _, d := range devs {
+			if d.ID == cfg.Camera.ID {
+				return fmt.Sprintf("  camera: ok (%q, auth=authorized)\n", cameraLabel(cfg))
+			}
+		}
+		var names []string
+		for _, d := range devs {
+			names = append(names, d.Name)
+		}
+		return fmt.Sprintf("  camera: MISSING — configured camera %q is not connected (available: %s)\n",
+			cfg.Camera.Name, strings.Join(names, ", "))
+	}
+	return fmt.Sprintf("  camera: ok (%q, auth=authorized, system default)\n", cameraLabel(cfg))
 }
 
 // displayBounds returns the screen-absolute bounds of display i (0 = main).
