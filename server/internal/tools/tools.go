@@ -22,24 +22,27 @@ import (
 
 // targetKind is the branch target resolution takes. "app" targets name a window
 // (so they can be captured window-only); the others are screen regions, which no
-// window filter can narrow.
+// window filter can narrow. `camera` is not a screen region either — it is the
+// one target with no bounds at all.
 type targetKind string
 
 const (
 	kindRect   targetKind = "rect"
 	kindScreen targetKind = "screen"
 	kindApp    targetKind = "app"
+	kindCamera targetKind = "camera"
 )
 
 // targetSpec is a resolved target before any expensive lookup: the kind plus
 // what that kind needs. Classifying first means window capture never pays for
 // the AppleScript window walk, and region capture never pays for SCK.
 type targetSpec struct {
-	Kind   targetKind
-	Rect   geom.Rect // kindRect
-	Screen int       // kindScreen
-	App    string    // kindApp
-	Title  string    // kindApp
+	Kind     targetKind
+	Rect     geom.Rect // kindRect
+	Screen   int       // kindScreen
+	App      string    // kindApp
+	Title    string    // kindApp
+	CameraID string    // kindCamera
 }
 
 // classifyTarget picks the target region: explicit rect > per-call app/title > configured mode (rect/screen/app).
@@ -62,6 +65,12 @@ func classifyTarget(cfg *config.Config, app, title string, rect *geom.Rect) (tar
 		}
 		return targetSpec{Kind: kindApp, App: a, Title: t}, nil
 	}
+	// Camera mode is the app's choice and outranks a stale stored app: a user
+	// on the camera segment is never silently retargeted. Per-call overrides
+	// above still win (same semantics as rect/screen).
+	if cfg.Mode == "camera" {
+		return targetSpec{Kind: kindCamera, CameraID: cfg.Camera.ID}, nil
+	}
 	// No per-call app/title: honor the configured mode.
 	if cfg.Mode == "rect" && cfg.Rect.W > 0 && cfg.Rect.H > 0 {
 		return targetSpec{Kind: kindRect, Rect: geom.Rect(cfg.Rect)}, nil
@@ -83,6 +92,8 @@ func (t targetSpec) rect() (geom.Rect, error) {
 		return t.Rect, nil
 	case kindScreen:
 		return displayBounds(t.Screen)
+	case kindCamera:
+		return geom.Rect{}, fmt.Errorf("camera target has no screen bounds")
 	default:
 		return window.Resolve(t.App, t.Title)
 	}
@@ -119,7 +130,7 @@ func RegisterReading(server *mcp.Server, access string) {
 		Window   *bool      `json:"window,omitempty" jsonschema:"Capture only the app window so windows on top of it are excluded (default: config capture.window); false = grab the screen region as before"`
 	}
 
-	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. With window: true an app target is captured as that window alone: overlapping windows are excluded and it does not have to be frontmost."},
+	add(server, access, "capture", &mcp.Tool{Name: "capture", Description: "Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image directly; pass max_width: -1 for native (un-downscaled) pixels when small text is unreadable. With window: true an app target is captured as that window alone: overlapping windows are excluded and it does not have to be frontmost. With the target set to camera (Screen Reader settings) capture returns one settled frame from that camera; image coordinates then map to no screen region."},
 		func(ctx context.Context, req *mcp.CallToolRequest, a regionArgs) (*mcp.CallToolResult, any, error) {
 			cfg := loadCfg()
 			spec, err := classifyTarget(cfg, a.App, a.Title, a.Rect)
@@ -152,6 +163,18 @@ func RegisterReading(server *mcp.Server, access string) {
 				return &mcp.CallToolResult{Content: []mcp.Content{
 					&mcp.ImageContent{Data: res.PNG, MIMEType: "image/png"},
 					&mcp.TextContent{Text: fmt.Sprintf("bounds={x:%d,y:%d,w:%d,h:%d} image=%dx%d source=window id=%d", b.X, b.Y, b.W, b.H, res.ImgW, res.ImgH, id)},
+				}}, nil, nil
+			}
+
+			if spec.Kind == kindCamera {
+				res, err := capture.CaptureCamera(spec.CameraID, mw)
+				if err != nil {
+					return errResult(err), nil, nil
+				}
+				// No bounds token: a camera image maps to no screen region.
+				return &mcp.CallToolResult{Content: []mcp.Content{
+					&mcp.ImageContent{Data: res.PNG, MIMEType: "image/png"},
+					&mcp.TextContent{Text: fmt.Sprintf("image=%dx%d source=camera device=%q", res.ImgW, res.ImgH, cameraLabel(cfg))},
 				}}, nil, nil
 			}
 
@@ -563,6 +586,15 @@ func captureMode(cfg *config.Config) string {
 		return "window"
 	}
 	return "region"
+}
+
+// cameraLabel names the configured camera for reports ("system default" when
+// no device was picked).
+func cameraLabel(cfg *config.Config) string {
+	if cfg.Camera.Name != "" {
+		return cfg.Camera.Name
+	}
+	return "system default"
 }
 
 // windowCaptureLine is doctor's ScreenCaptureKit probe. Both capture paths ride

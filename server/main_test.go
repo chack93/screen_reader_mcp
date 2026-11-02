@@ -107,6 +107,29 @@ func TestCapture_windowOnNonAppTarget(t *testing.T) {
 	}
 }
 
+// TestCapture_cameraTargetWindowFalse: camera targets reject window:true
+// through the generic non-app-target path, and never reach the camera.
+func TestCapture_cameraTargetWindowTrue(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Mode, cfg.Camera.ID = "camera", "does-not-exist-id"
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "capture", Arguments: map[string]any{"window": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("camera target accepted window:true: %v", res.Content)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "needs an app target") || !strings.Contains(text, "camera") {
+		t.Fatalf("text %q must name the camera kind", text)
+	}
+}
+
 func TestToolSurface_fullAccess(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no config file → default full access
 	got := listToolNames(t)
