@@ -157,6 +157,8 @@ int sr_sck_windows(SRWin **out, char **err) {
       recs[count].onscreen = w.isOnScreen ? 1 : 0;
       count++;
     }
+    // Set the out-param or the Go caller dereferences NULL (it slices recs whenever count > 0).
+    *out = recs;
     return count;
   }
   sr_set_err(err, SR_NEEDS_14);
