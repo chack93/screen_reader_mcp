@@ -59,6 +59,15 @@ static NSArray<AVCaptureDeviceType> *sr_cam_types(void) {
   }
   return self;
 }
+- (void)dealloc {
+  // _buf is a raw malloc that swap-in frees; without this the LAST frame of
+  // every session leaks on teardown (~8 MB at 1080p, ~33 MB at 4K per
+  // idle->capture cycle). Safe here: the only path that drops the last
+  // reference is sr_cam_stop, which stopRunning's FIRST — and stopRunning
+  // returns only after in-flight delegate callbacks have finished, so no
+  // captureOutput can be mid-copy when the holder dies.
+  if (_buf) free(_buf);
+}
 - (int)waitFrame:(int)secs { return sr_signal(_frame, secs) == 0 ? 0 : -1; }
 - (void)captureOutput:(AVCaptureOutput *)output
   didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
