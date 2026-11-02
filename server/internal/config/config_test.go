@@ -285,3 +285,30 @@ func TestSaveLoad_httpRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip mismatch: %+v vs %+v", got.HTTP, c.HTTP)
 	}
 }
+
+func TestCameraKeyRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(p, []byte(`{"mode":"camera","camera":{"id":"AA11","name":"Cam X"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mode != "camera" || c.Camera.ID != "AA11" || c.Camera.Name != "Cam X" {
+		t.Fatalf("parsed %+v", c)
+	}
+	if err := Save(p, c); err != nil { // a set_target-style full rewrite must keep the app's key
+		t.Fatal(err)
+	}
+	c2, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Camera.ID != "AA11" || c2.Camera.Name != "Cam X" {
+		t.Fatalf("camera key lost on Save: %+v", c2.Camera)
+	}
+	if Defaults().Camera.ID != "" || Defaults().Mode != "app" {
+		t.Fatal("defaults changed")
+	}
+}
