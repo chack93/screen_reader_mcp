@@ -66,6 +66,12 @@ After granting any permission, **quit and restart the hosting app** (terminal/op
 
 Window-only capture ([Capturing one window](#capturing-one-window)) uses the same Screen Recording grant, but the grant is not interchangeable in practice: a process that captures fine through the legacy display API can still be refused by ScreenCaptureKit with `-3801 The user declined TCCs`. `doctor` probes it separately on its `window_capture:` line, and region capture keeps working when that line is missing.
 
+Camera (only when the target is a camera): grant via the settings window's
+Permissions row (visible in camera mode) or System Settings → Privacy &
+Security → Camera. The green camera indicator is on while a session runs —
+the cached session tears down 30 s after the last frame, and stopping the
+server releases the camera immediately.
+
 ## Configure the target
 
 Config lives at `~/.config/screenreader/config.json` and is **re-read on every action** — live edits apply without restarting the server. Per-call args always override config.
@@ -96,6 +102,16 @@ Pick one target mode (or mix — per-call args always win):
 
 2. **Call the `set_target` tool** — sets and persists the default target (app/title, a pinned rect with `mode: "rect"`, or a whole display with `mode: "screen"` + `screen: <index>`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
 3. Use `list_windows` to discover the exact app name / title regex / bounds to pin, or `list_screens` to see the display indexes (0 = main) for a screen target.
+
+### Camera target
+
+Pick **Camera** in the settings Target segment and choose a device
+("(System default camera)" = whatever macOS marks default). The agent reads
+it through the same `capture` tool — one settled still frame per call
+(`source=camera` in the text line, no `bounds`). While camera mode is set,
+pointer tools (click/move/scroll/drag) are rejected; typing still reaches
+the focused app. Device selection is the user's: `set_target` cannot switch
+to or away from camera.
 
 ## Capturing one window
 
@@ -198,7 +214,7 @@ without hunting for the menu bar icon. The default is **F9**.
 
 | Tool | Purpose | Key args |
 | --- | --- | --- |
-| `capture` | Capture the target (window, pinned region, or whole screen) as a PNG image, with region bounds and image size. Read on-screen text from the image with your own vision. `window: true` captures the app window alone — overlapping windows excluded, no need to focus it. | `app`, `title`, `rect`, `max_width`, `window` |
+| `capture` | Capture the target (window, pinned region, whole screen, or camera) as a PNG image, with region bounds and image size. Read on-screen text from the image with your own vision. `window: true` captures the app window alone — overlapping windows excluded, no need to focus it. A camera target returns one settled still frame per call — the text line reads `image=WxH source=camera device="…"` with no `bounds`; while camera mode is set, pointer tools (click/move/scroll/drag) are rejected; typing still reaches the focused app. | `app`, `title`, `rect`, `max_width`, `window` |
 | `click` | Click at screen-absolute (x,y). | `x`, `y`, `button`, `clicks`, `dry_run`, `coords`, `rect`, `img_w`, `img_h` |
 | `move` | Move the cursor to (x,y). | `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
 | `scroll` | Scroll by (dx,dy) at (x,y) if given. | `dx`, `dy`, `x`, `y`, `coords`, `rect`, `img_w`, `img_h` |
@@ -213,6 +229,8 @@ without hunting for the menu bar icon. The default is **F9**.
 | `list_windows` | List visible windows (app, title, bounds) to choose a target. | — |
 | `list_screens` | List active displays (index, main flag, screen-absolute bounds) to choose a screen target. | — |
 | `doctor` | Self-check: displays, target resolution and permissions. | — |
+
+While the target is a camera, `click`, `move`, `scroll`, and `drag` return an error; `type`, `paste`, and `key` keep working — see [Camera target](#camera-target).
 
 ## Coordinate model
 
