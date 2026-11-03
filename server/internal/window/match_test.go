@@ -52,6 +52,70 @@ func TestMatch_appCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestMatch_separatorBridgedAppName(t *testing.T) {
+	// The app's Settings picker stores the CGWindowList process name while
+	// capture matches ScreenCaptureKit's localizedName: separators must bridge.
+	list := []Candidate{
+		{ID: 1, App: "Sublime Text", Title: "Welcome", OnScreen: true},
+		{ID: 2, App: "Sublime Text", Title: "main.go", OnScreen: true},
+		{ID: 3, App: "Sublime Text", Title: "main.go", OnScreen: false},
+	}
+	got, err := Match(list, "sublime_text", "main.go")
+	if err != nil {
+		t.Fatalf("stored process name must capture the localized app: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("got id %d, want the on-screen twin 2", got.ID)
+	}
+	if _, err := Match(list, "sublime_text", "Finance"); err == nil {
+		t.Fatal("the title filter must still apply to bridged candidates")
+	}
+	// Hyphens bridge too, and an empty title takes the first bridged window.
+	got, err = Match(list, "sublime-text", "")
+	if err != nil || got.ID != 1 {
+		t.Fatalf("got %+v err %v, want id 1", got, err)
+	}
+}
+
+func TestMatch_exactNameBeatsSeparatorTwin(t *testing.T) {
+	// A name an app really owns verbatim is never displaced by a bridged twin.
+	list := []Candidate{
+		{ID: 1, App: "Sublime Text", Title: "A", OnScreen: true},
+		{ID: 2, App: "sublime_text", Title: "A", OnScreen: true},
+	}
+	got, err := Match(list, "sublime_text", "A")
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("got id %d, want the exact EqualFold match 2", got.ID)
+	}
+}
+
+func TestMatch_normalizedFallbackStaysConservative(t *testing.T) {
+	// Normalization fuses separators, not word order or extra words.
+	if _, err := Match([]Candidate{{ID: 1, App: "Text Sublime", Title: "A", OnScreen: true}}, "sublime_text", "A"); err == nil {
+		t.Fatal("reordered words must not match")
+	}
+	_, err := Match([]Candidate{{ID: 1, App: "Sublime Text 2", Title: "A", OnScreen: true}}, "sublime_text", "A")
+	if err == nil {
+		t.Fatal("an extra word must not match")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "similar apps: Sublime Text 2") {
+		t.Fatalf("nearMiss should still suggest the close name, got %s", msg)
+	}
+}
+
+func TestMatch_suggestsDisplayNameForStoredName(t *testing.T) {
+	// The nearMiss half of the bug: sublime_text was stored, Sublime Text is on
+	// screen, and the error must name it so the target is fixable in one step.
+	list := []Candidate{{ID: 1, App: "Sublime Text", Title: "Welcome", OnScreen: true}}
+	_, err := Match(list, "sublime_text", "nope")
+	if err == nil || !strings.Contains(err.Error(), "similar apps: Sublime Text") {
+		t.Fatalf("want the display name suggested, got %v", err)
+	}
+}
+
 func TestMatch_onscreenBeatsMinimized(t *testing.T) {
 	list := append(cands(), Candidate{ID: 20, App: "Safari", Title: "Tab", OnScreen: false},
 		Candidate{ID: 21, App: "Safari", Title: "Tab", OnScreen: true})
