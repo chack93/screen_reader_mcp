@@ -125,6 +125,11 @@ http://127.0.0.1:18427/mcp
   - **Test capture…** — calls `capture` via the built-in MCP client on the current target;
     **fails if the image is all-black (every pixel ≤ 8)**; result + likely fix shown in an alert.
     This is also the TCC-attribution canary (§7) and the end-to-end connectivity check.
+  - **Access: full (switch to read-only)** / **Access: read-only (switch to full)** — added
+    2026-11-03 (see `TODO.md`): one state-dependent item that flips the config `access` mode in
+    place, matching the `Start server / Stop server` no-teardown pattern. The Go server re-reads
+    the config per tool call, so the switch needs no restart; the settings window's Agent access
+    section follows it on its next refresh.
   - **Quit ScreenReader** — terminates the child, then the app.
 
 ### 4.3 Settings window (~460×560)

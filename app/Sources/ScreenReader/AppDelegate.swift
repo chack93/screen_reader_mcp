@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var serverLine: NSMenuItem!
     private var serverActionItem: NSMenuItem!
     private var autoStopItem: NSMenuItem!
+    private var accessItem: NSMenuItem!
     /// Deadline of the pending 4h auto-stop (nil = timer off).
     private var autoStopAt: Date?
     /// Prebuilt menu bar icons: plain (server down) and dot-badged (server up).
@@ -105,6 +106,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func cancelAutoStop() {
         guard autoStopAt != nil else { return }
         autoStopAt = nil
+        updateMenu()
+    }
+
+    /// Flips the agent access mode in config.json (`access`). The Go server
+    /// re-reads the config on every tool call and rebuilds its tool surface per
+    /// HTTP request, so the change takes effect on the agent's next call — no
+    /// restart, no relaunch. A failed write leaves the config untouched (same
+    /// contract as the settings window) and says so.
+    @objc private func toggleAccess() {
+        do {
+            var json = try ConfigStore.load()
+            json = ConfigStore.applyAccess(
+                AccessToggle.next(ConfigStore.access(from: json)), to: json)
+            try ConfigStore.save(json)
+        } catch {
+            alert("Config write failed",
+                  "\(error)\nThe app will not overwrite config.json — fix it by hand.")
+        }
         updateMenu()
     }
 
@@ -208,6 +227,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         autoStopItem = menu.addItem(withTitle: "Timer: start",
                                     action: #selector(toggleAutoStop), keyEquivalent: "")
         autoStopItem.target = self
+        // Agent access: state-dependent like the two items above — one fixed
+        // item retitled in place. Always available (it gates the agent's tool
+        // surface, not the server), so unlike the timer it is never hidden.
+        accessItem = menu.addItem(withTitle: "Access: full (switch to read-only)",
+                                  action: #selector(toggleAccess), keyEquivalent: "")
+        accessItem.target = self
         let test = menu.addItem(withTitle: "Test capture…",
                                 action: #selector(testCapture), keyEquivalent: "")
         test.target = self
@@ -244,6 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             autoStopItem.title = "Timer: start"
         }
+        // The agent's current access mode, retitled from the config on every
+        // refresh (menu open, 30 s tick, after a toggle or a settings edit).
+        accessItem.title = AccessToggle.title(ConfigStore.access(from: json))
         serverLine.title = "Server: " + {
             switch server.state {
             case .running: return "running on \(addr)"

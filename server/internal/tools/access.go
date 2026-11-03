@@ -49,7 +49,7 @@ func accessGuard(name string) error {
 		return nil // unreadable config: keep the startup-time registration decision
 	}
 	if !Allow(name, cfg.Access) {
-		return fmt.Errorf("%s is disabled: access mode is %q (change it in the ScreenReader settings)", name, cfg.Access)
+		return fmt.Errorf("%s is disabled: access mode is %q (toggle it from the Screen Reader menu bar item, or in its settings window)", name, cfg.Access)
 	}
 	return nil
 }

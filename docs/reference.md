@@ -84,6 +84,7 @@ Pick one target mode (or mix — per-call args always win):
 {
   "version": 1,
   "hotkey": "f9",
+  "access": "full",
   "app": "Microsoft Remote Desktop",
   "title": "",
   "mode": "app",
@@ -99,6 +100,8 @@ Pick one target mode (or mix — per-call args always win):
 `capture.window` decides how an **app** target is captured and has three states: leave it **out** (the default) for *auto* — an app target is captured as that window alone, a pinned `rect` or a whole screen as it appears on screen (see [What each target captures](#what-each-target-captures)). `"window": true` forces the single-window render for app targets, `"window": false` always takes the region grab.
 
 `hotkey` is the menu-bar app's global stop key (see [Stop hotkey](#stop-hotkey)); `"off"` disables it. The server never reads it — the field is in its config struct only so a `set_target` rewrite cannot drop it.
+
+`access` gates the agent's **tool surface**: `"full"` (the default, also when the key is absent) registers all 15 tools; `"read_only"` registers only `capture`, `window_info`, `list_windows`, `list_screens`, `doctor` and `wait` — no input, no target switching. Any other value is enforced as read-only (fail closed). Toggle it from the menu bar item (**Access: …**) or Settings → Agent access; the mode is re-checked on every tool call, so it applies to an already-connected agent without restarting anything.
 
 2. **Call the `set_target` tool** — sets and persists the default target (app/title, a pinned rect with `mode: "rect"`, or a whole display with `mode: "screen"` + `screen: <index>`). Pass `clear_app`/`clear_title` to unset the stored app target or title filter.
 3. Use `list_windows` to discover the exact app name / title regex / bounds to pin, or `list_screens` to see the display indexes (0 = main) for a screen target.
@@ -189,7 +192,7 @@ The menu-bar app (`app/`, built by `./build.sh` into `app/build/Screen Reader MC
 
 - The endpoint is **loopback-only** and protected by a bearer token stored in `~/.config/screenreader/config.json` (`http.token`) — rotate it by editing the file; it takes effect on the next request. Keep the snippet in the app window in sync after rotating.
 - Quitting the app stops the MCP endpoint (start the app again to serve).
-- The app writes only `app`/`title`/`mode`/`screen`/`rect`/`http`/`hotkey` keys to the shared config; `capture`/`input` edits keep working.
+- The app writes only `app`/`title`/`mode`/`screen`/`rect`/`camera`/`http`/`access`/`hotkey` keys to the shared config; `capture`/`input` edits keep working.
 - Build/test: `cd app && swift build && swift test` (Kit logic is unit-tested; the GUI + TCC behavior is verified via the menu → Test capture canary).
 - One-time identity (recommended): Keychain Access → Certificate Assistant →
   Create a New Certificate → name **ScreenReader Dev**, kind Code Signing,
@@ -267,6 +270,7 @@ Because reading is visual, keep captures cheap: pin a tight `rect` or app/title 
 This server drives the **real cursor** on your desktop — it is not sandboxed from the rest of your screen. Mitigations:
 
 - Press the **stop hotkey** (default **F9**) to kill the server instantly from any app — see [Stop hotkey](#stop-hotkey).
+- Set **Access: read-only** in the menu bar item to take the agent's hands away: only `capture`, `window_info`, `list_windows`, `list_screens`, `doctor` and `wait` stay available — no clicking, typing or target switching. It is re-checked on every tool call, so it applies mid-session.
 - Use `dry_run: true` on `click`, `drag` to get the computed coordinates without executing.
 - Pin a `rect` target (or a tightly-scoped app/title) to limit the blast radius to the Remote Desktop window.
 - The agent's actions are **not** sandboxed from your desktop — keep the target pinned and review `dry_run` output for anything unexpected.
