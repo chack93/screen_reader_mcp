@@ -105,9 +105,12 @@ static NSArray<AVCaptureDeviceType> *sr_cam_types(void) {
 @end
 
 // SRCamSession pairs the live session with its frame holder for one handle.
+// name is the device's localizedName, kept so the frame-timeout error can say
+// WHICH camera stalled when several are registered.
 @interface SRCamSession : NSObject
 @property(strong, nonatomic) AVCaptureSession *session;
 @property(strong, nonatomic) SRCamHolder *holder;
+@property(strong, nonatomic) NSString *name;
 @end
 @implementation SRCamSession
 @end
@@ -218,6 +221,7 @@ void *sr_cam_start(const char *cid, char **err) {
   SRCamSession *h = [SRCamSession new];
   h.session = session;
   h.holder = holder;
+  h.name = dev.localizedName ?: @"(unnamed)";
   return (__bridge_retained void *)h;
 }
 
@@ -228,7 +232,7 @@ int sr_cam_frame(void *handle, int wait_secs, unsigned char **out,
   if (handle == NULL) { sr_set_err(err, @"no camera session"); return -1; }
   SRCamSession *s = (__bridge SRCamSession *)handle;
   if ([s.holder waitFrame:wait_secs] != 0) {
-    sr_set_err(err, @"timed out waiting for a camera frame (is the camera in use by another app?)");
+    sr_set_err(err, [NSString stringWithFormat:@"timed out waiting for a frame from \"%@\" (is it in use by another app?)", s.name ?: @"(unnamed)"]);
     return -1;
   }
   return [s.holder copyOut:out w:w h:h bpr:bpr];
