@@ -91,8 +91,10 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(out["app"] as? String, "A")
         XCTAssertEqual(out["access"] as? String, "read_only")
         XCTAssertEqual((out["capture"] as? [String: Any])?["max_width"] as? Int, 1600)
-        // round-trip
-        XCTAssertEqual(ConfigStore.offline(from: ConfigStore.applyOffline(false, to: [:])), false)
+        // overwrite: false replaces a stored true
+        let flipped = ConfigStore.applyOffline(false, to: ["offline": true])
+        XCTAssertEqual(flipped["offline"] as? Bool, false)
+        XCTAssertEqual(ConfigStore.offline(from: flipped), false)
     }
 
     func testHotkeyDefaultsToF9() {

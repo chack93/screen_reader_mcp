@@ -43,7 +43,7 @@ Grant the three macOS permissions (Screen Recording, Accessibility, Automation) 
 
 ## Stop at any time
 
-Press **F9** (default, rebindable) from any app to stop the MCP server instantly — see [Stop hotkey](docs/reference.md#stop-hotkey).
+Press **F9** (default, rebindable) from any app to pause the agent instantly — every tool answers `offline`; see [Offline mode](docs/reference.md#offline-mode).
 
 ## Capture just the window
 

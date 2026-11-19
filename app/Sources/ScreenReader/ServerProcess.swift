@@ -81,14 +81,6 @@ final class ServerProcess {
         } catch {}
     }
 
-    /// Start when down (stopped/crashed), stop when up (running/starting/
-    /// restarting) — the menu and settings show whichever applies in place of
-    /// a single "restart". Reading `state` here is main-thread (button/menu
-    /// action), matching the threading contract.
-    func toggle() {
-        if state.isUp { stop() } else { start() }
-    }
-
     func stop() {
         DispatchQueue.main.async { self.healthTimer?.invalidate(); self.healthTimer = nil }
         q.async {

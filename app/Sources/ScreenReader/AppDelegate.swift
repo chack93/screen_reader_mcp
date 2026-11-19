@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// on an actual up/down flip.
     private var menuIconShownBadged: Bool?
     /// 30 s tick, alive only while the server is up: keeps the timer title
-    /// fresh and performs the 4h auto-stop at its deadline.
+    /// fresh and performs the 4h auto-pause at its deadline.
     private var menuTick: Timer?
     private var targetLine: NSMenuItem!
     private var permLines: [NSMenuItem] = []
@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// The 4h auto-stop toggle: "Timer: start" when idle (click schedules),
-    /// "Timer: clear (server stop in H:MM)" when pending (click cancels).
+    /// "Timer: clear (server pause in H:MM)" when pending (click cancels).
     @objc private func toggleAutoStop() {
         if autoStopAt == nil { scheduleAutoStop() } else { cancelAutoStop() }
     }
@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menuTick = nil
     }
 
-    /// 30 s tick: performs the 4h auto-stop at its deadline and refreshes
+    /// 30 s tick: performs the 4h auto-pause at its deadline and refreshes
     /// the menu titles (the timer value is otherwise only re-rendered
     /// when the menu opens or a state change lands).
     private func tickMenu() {
@@ -316,8 +316,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the fixed item keeps the flicker-free no-teardown rule.
         autoStopItem.isHidden = !online
         if let at = autoStopAt {
-            // "server stop in …" is the 4h timer's CURRENT value (time left).
-            autoStopItem.title = "Timer: clear (server stop in \(TimerClock.format(at.timeIntervalSinceNow)))"
+            // "server pause in …" is the 4h timer's CURRENT value (time left).
+            autoStopItem.title = "Timer: clear (server pause in \(TimerClock.format(at.timeIntervalSinceNow)))"
         } else {
             autoStopItem.title = "Timer: start"
         }

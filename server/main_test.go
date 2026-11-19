@@ -337,7 +337,7 @@ func TestOfflineGuard_allTools(t *testing.T) {
 		if !res.IsError {
 			t.Fatalf("%s ran while offline: %v", name, res.Content)
 		}
-		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "offline —") {
+		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, `offline — server stopped from the Screen Reader app (start it from the menu bar item, or set "offline": false in ~/.config/screenreader/config.json)`) {
 			t.Fatalf("%s: %q", name, text)
 		}
 	}
