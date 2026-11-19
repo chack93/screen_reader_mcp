@@ -106,7 +106,7 @@ final class HotkeyCenter {
     }
 
     /// Carbon dispatches on the main event loop already, but the hop is
-    /// explicit so the caller's main-thread contract (ServerProcess.stop())
+    /// explicit so the caller's main-thread contract (AppDelegate.performStop())
     /// holds no matter how the callback is delivered.
     private func fire() {
         DispatchQueue.main.async { [onFire] in onFire() }

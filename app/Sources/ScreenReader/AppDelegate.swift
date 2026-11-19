@@ -227,7 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             settingsWC = SettingsWindowController(
                 server: server,
                 hotkeyChanged: { [weak self] spec in self?.applyHotkeySpec(spec) },
-                hotkeySuspended: { [weak self] s in self?.hotkeys.setSuspended(s) })
+                hotkeySuspended: { [weak self] s in self?.hotkeys.setSuspended(s) },
+                serverAction: { [weak self] in self?.toggleServer() })
         }
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)

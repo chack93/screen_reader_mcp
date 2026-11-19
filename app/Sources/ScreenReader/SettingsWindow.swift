@@ -10,6 +10,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// recorder listens (Carbon swallows keypresses it recognizes as hotkeys,
     /// so the currently assigned key would never reach the recorder).
     private let hotkeySuspended: (Bool) -> Void
+    /// Runs the app's single stop/start action (same dispatch as the menu
+    /// item — pause via the offline flag, never a kill).
+    private let serverAction: () -> Void
     private var permStatus: [TCCPermission: NSTextField] = [:]
     private var permRows: [TCCPermission: NSStackView] = [:]
     private var grantButton: NSButton!
@@ -38,10 +41,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var timer: Timer?
 
     init(server: ServerProcess, hotkeyChanged: @escaping (String) -> Void,
-         hotkeySuspended: @escaping (Bool) -> Void) {
+         hotkeySuspended: @escaping (Bool) -> Void,
+         serverAction: @escaping () -> Void) {
         self.server = server
         self.hotkeyChanged = hotkeyChanged
         self.hotkeySuspended = hotkeySuspended
+        self.serverAction = serverAction
         // Starting height only — fitToContent() sizes the window to its
         // sections on the first refresh and whenever they show/hide.
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
@@ -260,13 +265,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let json = (try? ConfigStore.load()) ?? [:]
         let (addr, token) = ConfigStore.httpConfig(from: json)
+        let offline = ConfigStore.offline(from: json)
         switch server.state {
-        case .running:               serverLabel.stringValue = "running on \(addr)"
+        case .running:               serverLabel.stringValue = offline
+                                        ? "offline — stopped (still listening on \(addr))"
+                                        : "running on \(addr)"
         case .starting, .restarting: serverLabel.stringValue = "starting…"
         case .crashed:               serverLabel.stringValue = "crashed"
         case .stopped:               serverLabel.stringValue = "stopped"
         }
-        serverButton.title = server.state.isUp ? "Stop server" : "Start server"
+        serverButton.title = (server.state.isUp && !offline) ? "Stop server" : "Start server"
         stderrView.isHidden = server.state != .crashed
         if server.state == .crashed { stderrView.string = server.stderrText }
         snippetView.string = Snippet.opencodeEntry(addr: addr, token: token)
@@ -627,7 +635,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return ok
     }
 
-    @objc private func toggleServer() { server.toggle() }
+    @objc private func toggleServer() { serverAction() }
 
     @objc private func copySnippet() {
         let json = (try? ConfigStore.load()) ?? [:]
