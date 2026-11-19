@@ -74,6 +74,27 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(ConfigStore.access(from: ConfigStore.applyAccess("full", to: [:])), "full")
     }
 
+    func testOfflineDefaultsFalse() {
+        XCTAssertFalse(ConfigStore.offline(from: [:]))
+        XCTAssertTrue(ConfigStore.offline(from: ["offline": true]))
+        XCTAssertFalse(ConfigStore.offline(from: ["offline": "yes"])) // wrong type → default
+    }
+
+    func testApplyOffline_preservesOtherKeys() {
+        let json: [String: Any] = [
+            "app": "A",
+            "access": "read_only",
+            "capture": ["max_width": 1600],
+        ]
+        let out = ConfigStore.applyOffline(true, to: json)
+        XCTAssertEqual(out["offline"] as? Bool, true)
+        XCTAssertEqual(out["app"] as? String, "A")
+        XCTAssertEqual(out["access"] as? String, "read_only")
+        XCTAssertEqual((out["capture"] as? [String: Any])?["max_width"] as? Int, 1600)
+        // round-trip
+        XCTAssertEqual(ConfigStore.offline(from: ConfigStore.applyOffline(false, to: [:])), false)
+    }
+
     func testHotkeyDefaultsToF9() {
         XCTAssertEqual(ConfigStore.hotkey(from: [:]), "f9")
         XCTAssertEqual(ConfigStore.hotkey(from: ["hotkey": "ctrl+f9"]), "ctrl+f9")

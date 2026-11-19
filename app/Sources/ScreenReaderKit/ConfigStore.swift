@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 /// Reads/writes ~/.config/screenreader/config.json.
-/// Mutates only app/title/mode/screen/rect/camera/http/access/hotkey; preserves every other key.
+/// Mutates only app/title/mode/screen/rect/camera/http/access/hotkey/offline; preserves every other key.
 public enum ConfigStore {
     public static let defaultPath: String =
         NSHomeDirectory() + "/.config/screenreader/config.json"
@@ -97,6 +97,20 @@ public enum ConfigStore {
     public static func applyAccess(_ access: String, to json: [String: Any]) -> [String: Any] {
         var out = json
         out["access"] = access
+        return out
+    }
+
+    /// Agent kill switch (config "offline"): true = the app stopped the server
+    /// and every tool call is answered "offline". Missing/false = running.
+    /// App-owned like access — the Go guard only reads it.
+    public static func offline(from json: [String: Any]) -> Bool {
+        json["offline"] as? Bool ?? false
+    }
+
+    /// Sets offline only; preserves every other key.
+    public static func applyOffline(_ offline: Bool, to json: [String: Any]) -> [String: Any] {
+        var out = json
+        out["offline"] = offline
         return out
     }
 
