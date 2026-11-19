@@ -39,9 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureToken()
-        // The kill key is live from the first moment the app is up; stop() is
-        // deduped, so firing it while the server is down does nothing.
-        hotkeys = HotkeyCenter { [weak self] in self?.server.stop() }
+        // The stop key is live from the first moment the app is up; performStop() is
+        // deduped (it only ever stops), so firing it while paused or down does nothing.
+        hotkeys = HotkeyCenter { [weak self] in self?.performStop() }
         applyHotkeySpec(ConfigStore.hotkey(from: (try? ConfigStore.load()) ?? [:]))
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // The dot badge indicates a RUNNING server. The dot diameter scales
@@ -75,6 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.cancelAutoStop()
             }
             self?.updateMenu()
+        }
+        // The pause is runtime state — an app launch (re)boots online (spec §2).
+        // A crash-respawn of the child while the app stays up is NOT a launch
+        // and keeps the flag. A corrupt config is left untouched here (same
+        // contract as ensureToken); the Go guard fails closed and says so.
+        if let json = try? ConfigStore.load(), ConfigStore.offline(from: json) {
+            do { try ConfigStore.save(ConfigStore.applyOffline(false, to: json)) }
+            catch { NSLog("screenreader: could not reset offline flag: \(error)") }
         }
         server.start()
         // Opt-out, not opt-in: the 4h stop is pending from the moment the app
@@ -143,10 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// the menu titles (the timer value is otherwise only re-rendered
     /// when the menu opens or a state change lands).
     private func tickMenu() {
-        if let at = autoStopAt, Date() >= at {
-            autoStopAt = nil
-            server.stop()
-        }
+        if let at = autoStopAt, Date() >= at { performStop() }
         updateMenu()
     }
 
@@ -156,10 +161,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshPermissions()
     }
 
+    /// The single stop/start entry — menu item, F9 hotkey, 4 h timer and the
+    /// settings window button all land here. "Stop" NEVER kills the process:
+    /// the server runs iff the app runs (spec §2), stopping only sets the
+    /// config "offline" flag, which the Go guard applies to every tool call.
     @objc private func toggleServer() {
-        // An explicit start opens a fresh 4h auto-stop window (opt-out).
-        if !server.state.isUp { scheduleAutoStop() }
-        server.toggle()
+        let json = ((try? ConfigStore.load()) ?? [:])
+        if server.state.isUp && !ConfigStore.offline(from: json) {
+            performStop()
+        } else {
+            performStart()
+        }
+    }
+
+    /// The stop lever: pauses the agent via the flag. No-op when already
+    /// paused or the process is down — like the old hotkey, it only ever
+    /// stops, so it can never be the reason a server is running.
+    private func performStop() {
+        let json = ((try? ConfigStore.load()) ?? [:])
+        guard server.state.isUp && !ConfigStore.offline(from: json) else { return }
+        guard writeOffline(true) else { updateMenu(); return } // failed write: stay online, don't half-stop
+        cancelAutoStop() // nothing left to auto-stop; the start lever opens a fresh window
+        updateMenu()
+    }
+
+    /// The start lever: unpause, spawn the process when it is down, and open
+    /// a fresh 4 h window either way — a resume without a deadline would
+    /// never cap real work again.
+    private func performStart() {
+        guard writeOffline(false) else { updateMenu(); return }
+        if !server.state.isUp { server.start() }
+        scheduleAutoStop()
+        updateMenu()
+    }
+
+    /// Writes the offline flag (no-op writes are skipped); on failure ALERTS
+    /// and changes nothing — the same leave-config-alone contract as the
+    /// access toggle — and returns false so callers abort the action.
+    @discardableResult
+    private func writeOffline(_ offline: Bool) -> Bool {
+        do {
+            var json = try ConfigStore.load()
+            guard ConfigStore.offline(from: json) != offline else { return true }
+            json = ConfigStore.applyOffline(offline, to: json)
+            try ConfigStore.save(json)
+            return true
+        } catch {
+            alert("Config write failed",
+                  "\(error)\nThe app will not overwrite config.json — fix it by hand.")
+            return false
+        }
     }
 
     /// Registers the configured stop hotkey ("off" / unparseable = nothing is
@@ -247,22 +298,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard serverLine != nil else { return }
         let json = ((try? ConfigStore.load()) ?? [:])
         let (addr, _) = ConfigStore.httpConfig(from: json)
-        let up = server.state.isUp
-        // The registered stop key is shown on the stop item so it is findable
-        // without opening settings; nothing is appended when it is off, or while
-        // the server is down (there is nothing to stop then).
-        let hk = up ? (Hotkey.parse(ConfigStore.hotkey(from: json)).map { " (\(Hotkey.glyphs($0)))" } ?? "") : ""
-        serverActionItem.title = (up ? "Server: stop" : "Server: start") + hk
-        // The dot badge mirrors the server state (template ink, so it takes
-        // the menu bar's tint like the symbol itself). Swap only on a flip.
-        if menuIconShownBadged != up {
-            menuIconShownBadged = up
-            statusItem.button?.image = up ? menuIconActive : menuIconIdle
+        // "Can do real work" = process up AND not paused. The dot badge, the
+        // action item and the 4 h timer row all key on that (spec §4.3).
+        let offline = ConfigStore.offline(from: json)
+        let online = server.state.isUp && !offline
+        // The registered stop key is shown on the stop item only while the
+        // action it performs is "stop" (paused/down shows nothing).
+        let hk = online ? (Hotkey.parse(ConfigStore.hotkey(from: json)).map { " (\(Hotkey.glyphs($0)))" } ?? "") : ""
+        serverActionItem.title = (online ? "Server: stop" : "Server: start") + hk
+        if menuIconShownBadged != online {
+            menuIconShownBadged = online
+            statusItem.button?.image = online ? menuIconActive : menuIconIdle
         }
-        // The 4h timer only makes sense while the server is running — the
-        // item disappears from the menu entirely when the server is down.
-        // isHidden on the fixed item keeps the flicker-free no-teardown rule.
-        autoStopItem.isHidden = !server.state.isUp
+        // The 4 h timer only makes sense while the agent can do real work —
+        // the item disappears when the server is down OR paused. isHidden on
+        // the fixed item keeps the flicker-free no-teardown rule.
+        autoStopItem.isHidden = !online
         if let at = autoStopAt {
             // "server stop in …" is the 4h timer's CURRENT value (time left).
             autoStopItem.title = "Timer: clear (server stop in \(TimerClock.format(at.timeIntervalSinceNow)))"
@@ -274,7 +325,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accessItem.title = AccessToggle.title(ConfigStore.access(from: json))
         serverLine.title = "Server: " + {
             switch server.state {
-            case .running: return "running on \(addr)"
+            case .running:
+                return offline
+                    ? "offline — stopped (still listening on \(addr))"
+                    : "running on \(addr)"
             case .starting, .restarting: return "starting…"
             case .crashed: return "CRASHED — check the log"
             case .stopped: return "not running"
