@@ -615,7 +615,7 @@ func RegisterTarget(server *mcp.Server, access string) {
 				}
 				out += fmt.Sprintf("  %d%s: %+v\n", i, tag, r)
 			}
-			out += fmt.Sprintf("config: access=%s mode=%s screen=%d app=%q title=%q rect=%+v\n", cfg.Access, cfg.Mode, cfg.Screen, cfg.App, cfg.Title, cfg.Rect)
+			out += fmt.Sprintf("config: access=%s offline=%v mode=%s screen=%d app=%q title=%q rect=%+v\n", cfg.Access, cfg.Offline, cfg.Mode, cfg.Screen, cfg.App, cfg.Title, cfg.Rect)
 			out += "permissions:\n"
 			out += permLine("screen_recording", perms.ScreenRecording(), "System Settings → Privacy & Security → Screen Recording (restart the app after granting)")
 			out += permLine("accessibility", perms.Accessibility(), "System Settings → Privacy & Security → Accessibility")

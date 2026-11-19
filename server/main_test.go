@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -307,5 +309,96 @@ func TestWindowInfo_cameraMode(t *testing.T) {
 	text := res.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(text, `mode=camera`) || !strings.Contains(text, `camera="Cam X"`) {
 		t.Fatalf("text %q must report the camera", text)
+	}
+}
+
+// TestOfflineGuard_allTools: while "offline" is set the tool LIST is
+// unchanged (offline never filters registration) and representative tools of
+// all three Register* groups answer with the offline status instead of doing
+// real work.
+func TestOfflineGuard_allTools(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	cfg := config.Defaults()
+	cfg.Offline = true
+	if err := config.Save(config.DefaultPath(), cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	ctx := context.Background()
+	for _, name := range []string{"wait", "capture", "doctor"} { // Reading/Input/Target registrars
+		args := map[string]any{}
+		if name == "wait" {
+			args = map[string]any{"ms": 1} // per-tool schemas reject foreign props (see TestClick_cameraModeBlocked)
+		}
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s call: %v", name, err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s ran while offline: %v", name, res.Content)
+		}
+		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "offline —") {
+			t.Fatalf("%s: %q", name, text)
+		}
+	}
+	if got := listToolNames(t); !sameNames(got, fullToolNames) {
+		t.Fatalf("offline tool set:\n got %v\nwant %v", got, fullToolNames)
+	}
+}
+
+// TestOfflineGuard_liveResume: a session registered while online keeps its
+// tool list when the flag flips, refuses calls while offline, and resumes
+// them when it clears — no reconnect (mirror of TestAccessGuard_blocksStaleSession).
+func TestOfflineGuard_liveResume(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	ctx := context.Background()
+	save := func(offline bool) {
+		t.Helper()
+		cfg := config.Defaults()
+		cfg.Offline = offline
+		if err := config.Save(config.DefaultPath(), cfg); err != nil {
+			t.Fatalf("save config: %v", err)
+		}
+	}
+	save(true)
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "wait", Arguments: map[string]any{"ms": 1}})
+	if err != nil {
+		t.Fatalf("wait call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("wait ran while offline")
+	}
+	save(false)
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "wait", Arguments: map[string]any{"ms": 1}})
+	if err != nil {
+		t.Fatalf("wait call after resume: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("wait refused after resume: %v", res.Content)
+	}
+}
+
+// TestOfflineGuard_unreadableConfig: the kill switch FAILS CLOSED — a config
+// that cannot be parsed rejects calls instead of silently resuming work.
+func TestOfflineGuard_unreadableConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cs := connectClient(t)
+	// config.Save creates this dir; the raw WriteFile below needs it to exist.
+	if err := os.MkdirAll(filepath.Dir(config.DefaultPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.DefaultPath(), []byte("{ not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "wait", Arguments: map[string]any{"ms": 1}})
+	if err != nil {
+		t.Fatalf("wait call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("wait ran with an unreadable config")
+	}
+	if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "unreadable") {
+		t.Fatalf("text %q must say the config is unreadable", text)
 	}
 }

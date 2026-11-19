@@ -293,6 +293,24 @@ func AuthStatus() string {
 	}
 }
 
+// Close releases a cached session immediately — "stop" must turn the camera
+// light off (spec §4.1) — and is idempotent, so the tools offline guard can
+// call it on every refused call. Takes mu (the same lock Capture holds), so
+// it can never pull a session out from under a live frame grab, and cancels
+// the idle timer since there is nothing left for it to tear down.
+func Close() {
+	mu.Lock()
+	defer mu.Unlock()
+	if idle != nil {
+		idle.Stop()
+	}
+	if active != nil {
+		C.sr_cam_stop(active)
+		active = nil
+		activeID = ""
+	}
+}
+
 // List enumerates cameras without starting a session (used only to name
 // alternatives in error messages; the app's picker enumerates in Swift).
 func List() ([]Device, error) {
