@@ -13,6 +13,7 @@ Setup details, configuration, tools, and operations. See the [README](../README.
 - [HTTP mode (manual)](#http-mode-manual)
 - [App details](#app-details)
 - [Stop hotkey](#stop-hotkey)
+- [Offline mode](#offline-mode)
 - [Tools](#tools)
 - [Coordinate model](#coordinate-model)
 - [Reading the screen (vision workflow)](#reading-the-screen-vision-workflow)
@@ -69,8 +70,7 @@ Window-only capture ([What each target captures](#what-each-target-captures)) us
 Camera (only when the target is a camera): grant via the settings window's
 Permissions row (visible in camera mode) or System Settings → Privacy &
 Security → Camera. The green camera indicator is on while a session runs —
-the cached session tears down 30 s after the last frame, and stopping the
-server releases the camera immediately.
+the cached session tears down 30 s after the last frame, and stopping releases the camera immediately: while the server is offline every refused call closes the session, so the light is off within 30 s even if nothing calls again.
 
 ## Configure the target
 
@@ -85,6 +85,7 @@ Pick one target mode (or mix — per-call args always win):
   "version": 1,
   "hotkey": "f9",
   "access": "full",
+  "offline": false,
   "app": "Microsoft Remote Desktop",
   "title": "",
   "mode": "app",
@@ -100,6 +101,8 @@ Pick one target mode (or mix — per-call args always win):
 `capture.window` decides how an **app** target is captured and has three states: leave it **out** (the default) for *auto* — an app target is captured as that window alone, a pinned `rect` or a whole screen as it appears on screen (see [What each target captures](#what-each-target-captures)). `"window": true` forces the single-window render for app targets, `"window": false` always takes the region grab.
 
 `hotkey` is the menu-bar app's global stop key (see [Stop hotkey](#stop-hotkey)); `"off"` disables it. The server never reads it — the field is in its config struct only so a `set_target` rewrite cannot drop it.
+
+`offline` is the app's stop switch: while `true`, the still-running server refuses **every** tool call with `offline — server stopped from the Screen Reader app …` — see [Offline mode](#offline-mode). The menu-bar app writes it; the `access`/`hotkey` rules still apply after resuming.
 
 `access` gates the agent's **tool surface**: `"full"` (the default, also when the key is absent) registers all 15 tools; `"read_only"` registers only `capture`, `window_info`, `list_windows`, `list_screens`, `doctor` and `wait` — no input, no target switching. Any other value is enforced as read-only (fail closed). Toggle it from the menu bar item (**Access: …**) or Settings → Agent access; the mode is re-checked on every tool call, so it applies to an already-connected agent without restarting anything.
 
@@ -191,8 +194,8 @@ The recommended way to run HTTP mode is the Screen Reader MCP menu-bar app (see 
 The menu-bar app (`app/`, built by `./build.sh` into `app/build/Screen Reader MCP.app`) spawns `screenreader --http` (loopback Streamable HTTP on `:18427`) and owns the TCC grants.
 
 - The endpoint is **loopback-only** and protected by a bearer token stored in `~/.config/screenreader/config.json` (`http.token`) — rotate it by editing the file; it takes effect on the next request. Keep the snippet in the app window in sync after rotating.
-- Quitting the app stops the MCP endpoint (start the app again to serve).
-- The app writes only `app`/`title`/`mode`/`screen`/`rect`/`camera`/`http`/`access`/`hotkey` keys to the shared config; `capture`/`input` edits keep working.
+- The server process runs **iff the app runs**: stopping (menu **Server: stop** or the hotkey) only *pauses* it into [Offline mode](#offline-mode) — the MCP connection survives; quitting the app is what ends the endpoint (reopen the app to serve again).
+- The app writes only `app`/`title`/`mode`/`screen`/`rect`/`camera`/`http`/`access`/`hotkey`/`offline` keys to the shared config; `capture`/`input` edits keep working.
 - Build/test: `cd app && swift build && swift test` (Kit logic is unit-tested; the GUI + TCC behavior is verified via the menu → Test capture canary).
 - One-time identity (recommended): Keychain Access → Certificate Assistant →
   Create a New Certificate → name **ScreenReader Dev**, kind Code Signing,
@@ -202,13 +205,13 @@ The menu-bar app (`app/`, built by `./build.sh` into `app/build/Screen Reader MC
 
 ## Stop hotkey
 
-The app registers a **global** hotkey that stops the MCP server: the lever you
+The app registers a **global** hotkey that stops the agent ([Offline mode](#offline-mode)): the lever you
 reach for when an agent is driving your desktop and you want it to stop *now*,
 without hunting for the menu bar icon. The default is **F9**.
 
 - It only ever **stops**. It cannot start the server, so it can never be the
   reason a server is running — restarting is a deliberate act in the menu or the
-  settings window. Pressing it while the server is down does nothing.
+  settings window. Pressing it while the server is down does nothing. It never kills the process and never drops the MCP connection.
 - It needs **no extra permission**. Registration goes through Carbon
   (`RegisterEventHotKey`), not an event tap, so it works for read-only users and
   never triggers an Input Monitoring prompt.
@@ -226,6 +229,27 @@ without hunting for the menu bar icon. The default is **F9**.
   `media key — try Fn or ⌃/⌥` when this happens.
 - If another app already owns the key exclusively, ours silently never fires and
   the app logs `could not register stop hotkey`. Pick another binding.
+
+## Offline mode
+
+The app's **Server: stop** (and the stop hotkey / the 4 h timer) does not kill
+the Go process — it flips `"offline": true` in the shared config, and the
+still-running, still-connected server refuses **every** tool call with:
+
+> `offline — server stopped from the Screen Reader app (start it from the menu bar item, or set "offline": false in ~/.config/screenreader/config.json)`
+
+- **The MCP connection stays healthy** while offline: no failed-connection noise
+  in the client; the tool list is unchanged; the refusal is a normal tool error.
+- Re-read on every call (like `access`), so stop and resume apply mid-session
+  with no restart. Bare stdio/HTTP users can toggle the key by hand.
+- Fails **closed**: an unparseable config also refuses calls (naming the config
+  error) rather than silently resuming real clicks.
+- While offline, every refused call closes the cached camera session, so the
+  indicator light goes off within 30 s even if no further calls arrive.
+- **Start** from the menu/settings unpause-and-caps afresh (4 h window); an app
+  launch always boots online. Quitting the app still ends the process.
+- `access` is orthogonal: `read_only` decides *which* tools exist, offline
+  suspends *all* of them until resumed.
 
 ## Tools
 
@@ -269,7 +293,7 @@ Because reading is visual, keep captures cheap: pin a tight `rect` or app/title 
 
 This server drives the **real cursor** on your desktop — it is not sandboxed from the rest of your screen. Mitigations:
 
-- Press the **stop hotkey** (default **F9**) to kill the server instantly from any app — see [Stop hotkey](#stop-hotkey).
+- Press the **stop hotkey** (default **F9**) to pause the agent instantly from any app — every tool answers `offline`; see [Offline mode](#offline-mode).
 - Set **Access: read-only** in the menu bar item to take the agent's hands away: only `capture`, `window_info`, `list_windows`, `list_screens`, `doctor` and `wait` stay available — no clicking, typing or target switching. It is re-checked on every tool call, so it applies mid-session.
 - Use `dry_run: true` on `click`, `drag` to get the computed coordinates without executing.
 - Pin a `rect` target (or a tightly-scoped app/title) to limit the blast radius to the Remote Desktop window.
@@ -280,7 +304,7 @@ This server drives the **real cursor** on your desktop — it is not sandboxed f
 | Symptom | Fix |
 | --- | --- |
 | Black image from `capture` | Grant **Screen Recording**, then restart the hosting app. |
-| `capture` hangs with no result while `/health` still answers | The child is wedged inside the CoreGraphics grab: restart the server from the menu bar app (or `kill` the `screenreader --http` child — the app respawns it). Other tools keep working, so a fast `window_info`/`wait` does not prove capture is alive. |
+| `capture` hangs with no result while `/health` still answers | The child is wedged inside the CoreGraphics grab: restart the process (quit and reopen the app, or `kill` the `screenreader --http` child — the app respawns it). Other tools keep working, so a fast `window_info`/`wait` does not prove capture is alive. |
 | No typing/clicking | Grant **Accessibility**, then restart the hosting app. |
 | `osascript:` errors | Grant **Automation** (System Events), then restart the hosting app. |
 | cgo build failure (`fatal error: 'objc.h' file not found` etc.) | Install Xcode Command Line Tools: `xcode-select --install`. |
@@ -292,5 +316,6 @@ This server drives the **real cursor** on your desktop — it is not sandboxed f
 | Capture looks right but a click hits another window | The image came from the region path (`source=region`), which shows whatever is on top. For an app target use window capture and check its `occluded=` note; `focus_window` before clicking. |
 | `… is not shareable (closed, minimized, or on another Space)` | `focus_window` first, then capture; window capture cannot reach a minimized window or another Space. |
 | Stop hotkey does nothing | Reopen the app (a build from before the feature has no hotkey), check `hotkey` isn't `"off"` in the config, and see the media-key caveat under [Stop hotkey](#stop-hotkey). |
+| All tools answer `offline — server stopped …` | The app paused the server (menu **Server: stop** or the stop hotkey). Resume with **Server: start**, or set `"offline": false` in the config. |
 
 Remember: after granting any permission, **restart the app that owns the server process** — TCC grants are read at process start.
