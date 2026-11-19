@@ -43,6 +43,10 @@ type HTTPCfg struct {
 type Config struct {
 	Version int    `json:"version"`
 	Access  string `json:"access"` // "full" | "read_only" — which MCP tools the agent gets
+	// Offline is the menu-bar app's stop switch: true = every tool call is
+	// refused with the "offline" status (checked per call in internal/tools).
+	// Carried through Save like Hotkey/Camera so set_target rewrites keep it.
+	Offline bool `json:"offline"`
 	// Hotkey is the menu-bar app's global "stop the server" key spec (e.g. "f9",
 	// "ctrl+opt+f9", "off"). The server never reads it; the field exists so
 	// Save (set_target rewrites the whole file) does not drop the app's setting.

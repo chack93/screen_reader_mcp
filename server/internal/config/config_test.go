@@ -240,6 +240,44 @@ func TestSaveLoad_accessRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDefaults_offline(t *testing.T) {
+	if c := Defaults(); c.Offline {
+		t.Fatalf("default offline = true, want false")
+	}
+}
+
+func TestLoad_offline(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(p, []byte(`{"offline":true}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if !c.Offline {
+		t.Fatalf("offline = false, want true")
+	}
+}
+
+// TestSaveLoad_offlineRoundTrip: "offline" belongs to the menu-bar app, but
+// it must survive a server-side Save (set_target rewrites the whole file).
+func TestSaveLoad_offlineRoundTrip(t *testing.T) {
+	tempDir(t)
+	p := filepath.Join(t.TempDir(), "config.json")
+	c := Defaults()
+	c.Offline = true
+	if err := Save(p, c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.Offline {
+		t.Fatalf("round-trip offline = false, want true")
+	}
+}
+
 // TestSaveLoad_hotkeyRoundTrip: "hotkey" belongs to the menu-bar app (the
 // server never reads it), but it must survive a server-side Save — set_target
 // rewrites the whole file, and any key missing from the struct is dropped.
