@@ -149,7 +149,7 @@ Run: `cd server && CGO_ENABLED=1 go build ./internal/camera/` → success; `go t
 
 - [ ] **Step 2: Write the failing guard tests**
 
-Append to `server/main_test.go` and add `"os"` to its import block:
+Append to `server/main_test.go` and add `"os"` and `"path/filepath"` to its import block:
 
 ```go
 // TestOfflineGuard_allTools: while "offline" is set the tool LIST is
@@ -224,6 +224,9 @@ func TestOfflineGuard_liveResume(t *testing.T) {
 func TestOfflineGuard_unreadableConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cs := connectClient(t)
+	if err := os.MkdirAll(filepath.Dir(config.DefaultPath()), 0o755); err != nil { // fresh HOME has no config dir
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(config.DefaultPath(), []byte("{ not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
