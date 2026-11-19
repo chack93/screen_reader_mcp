@@ -100,10 +100,10 @@ config.json  ── re-read per call (existing) ──▶  ┌──────
   check inside `add()`, so all current and future tools are covered by construction. Registered
   tool list never changes while paused — clients keep a stable surface and get an explicit error:
 
-  - `offline`: `offline — server stopped from the Screen Reader app (start it from the menu bar,
-    or set "offline": false in config.json)`
+  - `offline`: `offline — server stopped from the Screen Reader app (start it from the menu bar
+    item, or set "offline": false in ~/.config/screenreader/config.json)`
   - config unreadable while the guard runs: refused — `server refused the call: config.json is
-    unreadable (<err>); fix or remove it, then start the server from the app` (fail closed;
+    unreadable (<err>) — fix or remove it, then start the server from the app` (fail closed;
     deliberate divergence from `accessGuard`'s fail-open, which only gates *which* tools run).
 - `internal/camera`: new exported `Close()` — mutex-guarded, idempotent, cancels the idle timer and
   releases the session; no-op when nothing is open. `offlineGuard` calls it on every rejection, so
@@ -147,14 +147,18 @@ config.json  ── re-read per call (existing) ──▶  ┌──────
 
 The dot badge now means "can do real work" (up **and** online). Hidden/shown rows keep the
 fixed-structure no-teardown rule (`autoStopItem` precedent). The hotkey glyph stays on the stop
-item only while the action it performs is "stop".
+item only while the action it performs is "stop". While **offline**, a respawning
+(starting/restarting) child shows the paused display instead of the row above — dot **off**,
+`Server: start` — because the dot tracks "can do real work", not "process up".
 
 ## 5. Error handling & edge cases
 
 - **Config write fails during stop/start** → alert, config untouched, state unchanged (contract
   shared with `toggleAccess`).
 - **Config corrupt while paused** → guard fails closed; the rejection message says the config is
-  unreadable (the app's own writes keep it valid; corruption is hand-edit or disk trouble).
+  unreadable — `server refused the call: config.json is unreadable (<err>) — fix or remove it,
+  then start the server from the app` (the app's own writes keep it valid; corruption is
+  hand-edit or disk trouble).
 - **Paused child crashes** → backoff respawn (unchanged), comes back paused; menu shows
   `CRASHED — check the log` only after the 3 retries, as today.
 - **`access` toggle while paused** → still just writes `access`; offline overrides any mode until
@@ -162,6 +166,9 @@ item only while the action it performs is "stop".
 - **Bare stdio user** → same flag, same guard; the error text names config.json as the escape.
 - **Old behavior removed**: the menu/hotkey/timer no longer free the port — intentional; nothing
   else needs the port while the app is open.
+- **Start lever with a corrupt config** → the flag write fails: alert, config untouched, and the
+  app does **not** spawn the child — a server started against a corrupt config would refuse every
+  call anyway.
 
 ## 6. Testing
 
