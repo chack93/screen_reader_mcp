@@ -79,7 +79,7 @@ func TestSaveLoad_offlineRoundTrip(t *testing.T) {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd server && go test ./internal/config/ -run Offline -v`
+Run: `cd server && go test ./internal/config/ -run offline -v`
 Expected: compile error `c.Offline undefined` (or test failures).
 
 - [ ] **Step 3: Implement**
@@ -97,7 +97,7 @@ In `server/internal/config/config.go`, add the field to `Config` directly after 
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd server && go test ./internal/config/ -run Offline -v` → PASS (3 tests).
+Run: `cd server && go test ./internal/config/ -run offline -v` → PASS (3 tests).
 Then: `CGO_ENABLED=1 go vet ./...` from `server/` → clean.
 
 - [ ] **Step 5: Commit**
